@@ -100,7 +100,7 @@ async def connect_to_openai():
         try:
             logger.info(f"Attempting to connect to OpenAI WebSocket (attempt {attempts+1}/{MAX_RECONNECT_ATTEMPTS})")
             conn = await websockets.connect(
-                'wss://api.openai.com/v1/realtime?model=gpt-4o',
+                'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview',
                 extra_headers=headers,
                 ping_interval=5,  # Send ping every 5 seconds to keep connection alive
                 ping_timeout=20,   # Wait 20 seconds for pong response
