@@ -57,12 +57,15 @@ async def handle_media_stream(websocket: WebSocket):
     print("Client connected")
     await websocket.accept()
 
+    # Fix for the headers issue
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "OpenAI-Beta": "realtime=v1"
+    }
+    
     async with websockets.connect(
             'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01',
-            additional_headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1"
-            }) as openai_ws:
+            extra_headers=headers) as openai_ws:
         await send_session_update(openai_ws)
         stream_sid = None
 
