@@ -102,6 +102,14 @@ async def handle_media_stream(websocket: WebSocket):
             
             await send_session_update(openai_ws)
             stream_sid = None
+            
+            # Send initial greeting to trigger OpenAI model
+            initial_message = {
+                "type": "content.text",
+                "content": "שלום"
+            }
+            logger.info("Sending initial greeting to OpenAI")
+            await openai_ws.send(json.dumps(initial_message))
 
             async def receive_from_twilio():
                 """Receive audio data from Twilio and send it to the OpenAI Realtime API."""
