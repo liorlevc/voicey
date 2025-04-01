@@ -38,12 +38,14 @@ async def index_page():
 async def handle_incoming_call(request: Request):
     """Handle incoming call and return TwiML response to connect to Media Stream."""
     response = VoiceResponse()
-    # <Say> punctuation to improve text-to-speech flow
+    # Use language attribute to specify Hebrew
     response.say(
-        "אתה מחובר לשיחה"
+        "אתה מחובר לשיחה", 
+        language="he-IL", 
+        voice="Polly.Ruth"
     )
     response.pause(length=1)
-    response.say("שיחה נעימה")
+    response.say("שיחה נעימה", language="he-IL", voice="Polly.Ruth")
     host = request.url.hostname
     connect = Connect()
     connect.stream(url=f'wss://{host}/media-stream')
