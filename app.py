@@ -100,7 +100,7 @@ async def connect_to_openai():
         try:
             logger.info(f"Attempting to connect to OpenAI WebSocket (attempt {attempts+1}/{MAX_RECONNECT_ATTEMPTS})")
             conn = await websockets.connect(
-                'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview',
+                'wss://api.openai.com/v1/realtime?model=gpt-4o',
                 extra_headers=headers,
                 ping_interval=5,  # Send ping every 5 seconds to keep connection alive
                 ping_timeout=20,   # Wait 20 seconds for pong response
@@ -141,17 +141,8 @@ async def handle_media_stream(websocket: WebSocket):
             # Wait briefly for the session to initialize
             await asyncio.sleep(2)
             
-            # Then send initial greeting to trigger OpenAI model
-            initial_message = {
-                "type": "message",
-                "message": {
-                    "role": "user",
-                    "content": "שלום"
-                }
-            }
-            logger.info("Sending initial greeting to OpenAI")
-            await openai_ws.send(json.dumps(initial_message))
-            logger.info("Initial greeting sent")
+            # No initial message - let the audio from Twilio trigger responses
+            logger.info("Session initialized, waiting for audio from Twilio")
 
             # Store buffered audio data during reconnection
             audio_buffer = []
@@ -258,7 +249,7 @@ async def send_session_update(openai_ws):
             "type": "session.update",
             "session": {
                 "turn_detection": {
-                    "type": "manual"
+                    "type": "server_vad"
                 },
                 "input_audio_format": "g711_ulaw",
                 "output_audio_format": "g711_ulaw",
