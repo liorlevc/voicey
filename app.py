@@ -102,9 +102,11 @@ async def connect_to_openai():
             conn = await websockets.connect(
                 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01',
                 extra_headers=headers,
-                ping_interval=20,  # Send ping every 20 seconds to keep connection alive
+                ping_interval=5,  # Send ping every 5 seconds to keep connection alive
                 ping_timeout=20,   # Wait 20 seconds for pong response
-                close_timeout=10   # Wait 10 seconds for close handshake
+                close_timeout=10,   # Wait 10 seconds for close handshake
+                max_size=None,     # No limit on message size
+                max_queue=32       # Increase queue size
             )
             logger.info("Successfully connected to OpenAI WebSocket")
             return conn
@@ -132,16 +134,24 @@ async def handle_media_stream(websocket: WebSocket):
         try:
             openai_ws = await connect_to_openai()
             
+            # First send session update to configure the connection
             await send_session_update(openai_ws)
             stream_sid = None
             
-            # Send initial greeting to trigger OpenAI model
+            # Wait briefly for the session to initialize
+            await asyncio.sleep(2)
+            
+            # Then send initial greeting to trigger OpenAI model
             initial_message = {
-                "type": "content.text",
-                "content": "שלום"
+                "type": "message",
+                "message": {
+                    "role": "user",
+                    "content": "שלום"
+                }
             }
             logger.info("Sending initial greeting to OpenAI")
             await openai_ws.send(json.dumps(initial_message))
+            logger.info("Initial greeting sent")
 
             # Store buffered audio data during reconnection
             audio_buffer = []
@@ -165,6 +175,10 @@ async def handle_media_stream(websocket: WebSocket):
                                 "audio": data['media']['payload']
                             }
                             try:
+                                # Log the first few audio packets to debug format issues
+                                if stream_sid and stream_sid.startswith("M") and len(audio_buffer) < 5:
+                                    logger.info(f"Sending audio packet to OpenAI (sample): {data['media']['payload'][:20]}...")
+                                
                                 await openai_ws.send(json.dumps(audio_append))
                             except websockets.exceptions.ConnectionClosed:
                                 logger.error("OpenAI WebSocket connection closed unexpectedly")
@@ -244,7 +258,7 @@ async def send_session_update(openai_ws):
             "type": "session.update",
             "session": {
                 "turn_detection": {
-                    "type": "server_vad"
+                    "type": "manual"
                 },
                 "input_audio_format": "g711_ulaw",
                 "output_audio_format": "g711_ulaw",
@@ -257,6 +271,9 @@ async def send_session_update(openai_ws):
         logger.info('Sending session update to OpenAI')
         await openai_ws.send(json.dumps(session_update))
         logger.info('Session update sent successfully')
+        
+        # Wait a moment for the session to initialize properly
+        await asyncio.sleep(1)
     except Exception as e:
         logger.error(f"Error sending session update: {str(e)}")
         logger.error(traceback.format_exc())
