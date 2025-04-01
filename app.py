@@ -40,7 +40,7 @@ async def handle_incoming_call(request: Request):
     response = VoiceResponse()
     # <Say> punctuation to improve text-to-speech flow
     response.say(
-        "connected"
+        "אתה מחובר לשיחה"
     )
     response.pause(length=1)
     response.say("שיחה נעימה")
