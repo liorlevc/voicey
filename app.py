@@ -463,13 +463,12 @@ async def handle_outgoing_call(
         
         response = VoiceResponse()
         
-        # Clearer Hebrew greeting for outgoing calls with pause
-        greeting = "שלום, מתחברים לשיחה. רגע בבקשה."
-        if recipient_name:
-            greeting = "שלום, מתחברים לשיחה. רגע בבקשה."
-            
+        # Shorter greeting with no pauses to speed up connection
+        greeting = "מתחברים..."
         response.say(greeting, language="he-IL", voice="woman")
-        response.pause(length=2)  # Longer pause to ensure the connection is established
+        
+        # Remove the pause to speed up stream connection
+        # response.pause(length=2)  # Removed longer pause
         
         # Get the host for WebSocket connection
         host = request.url.hostname
@@ -680,7 +679,8 @@ async def handle_media_stream(websocket: WebSocket):
                             
                             # For outgoing calls, trigger AI to speak once we have stream_sid
                             if call_direction == "outgoing" and not speech_triggered and stream_sid:
-                                await asyncio.sleep(1)  # Give a short delay for connection to stabilize
+                                # Reduce wait time from 1 second to 0.2 seconds
+                                await asyncio.sleep(0.2)  # Minimal stabilization delay
                                 
                                 try:
                                     logger.info("=== INITIATING AGGRESSIVE AI SPEECH TRIGGERING SEQUENCE ===")
@@ -690,33 +690,39 @@ async def handle_media_stream(websocket: WebSocket):
                                     if recipient_name:
                                         greeting = "שלום מדברת מיכל, אני מתקשרת בכדי לברר האם אתה מתכנן מעבר דירה בקרוב? והאם תרצה לשמוע את ההצעה?"
                                     
-                                    # Send a direct message to the AI to speak
+                                    # Send multiple aggressive triggers with minimal delays
                                     trigger_messages = [
-                                        # First message to set user intent
-                                        {
-                                            "type": "message",
-                                            "message": {
-                                                "role": "user",
-                                                "content": "תתחילי לדבר עכשיו בבקשה. אל תחכי לי שאדבר."
-                                            }
-                                        },
-                                        # Force AI to say hello (direct speech command)
+                                        # First immediate speech command - highest priority
                                         {
                                             "type": "content.speech",
                                             "content": greeting
                                         },
-                                        # Final fallback - direct text trigger
+                                        # Backup speech command
+                                        {
+                                            "type": "content.speech",
+                                            "content": greeting
+                                        },
+                                        # Message to set aggressive intent
+                                        {
+                                            "type": "message",
+                                            "message": {
+                                                "role": "user",
+                                                "content": "תתחילי לדבר עכשיו מיד בלי שום השהייה. אל תחכי לי שאדבר."
+                                            }
+                                        },
+                                        # Direct text command as final fallback
                                         {
                                             "type": "content.text",
                                             "content": "האם אתה מתכנן מעבר דירה בקרוב?"
                                         }
                                     ]
                                     
-                                    # Send all trigger messages with short delays
+                                    # Send all trigger messages with minimal delays
                                     for i, msg in enumerate(trigger_messages):
                                         logger.info(f"Sending trigger message {i+1}/{len(trigger_messages)}: {msg['type']}")
                                         await openai_ws.send(json.dumps(msg))
-                                        await asyncio.sleep(0.5)
+                                        # Reduced delay between messages from 0.5 to 0.1 seconds
+                                        await asyncio.sleep(0.1)
                                     
                                     # Mark as triggered
                                     speech_triggered = True
@@ -919,7 +925,8 @@ async def send_session_update(openai_ws, call_direction="incoming", recipient_na
                 "voice": VOICE,
                 "instructions": system_message,
                 "modalities": modalities,
-                "temperature": 0.8,
+                "temperature": 0.7,  # Lower temperature for more consistent, immediate responses
+                "max_completion_tokens": 1024,  # Ensure we have enough tokens for the greeting
             }
         }
         logger.info(f'Sending session update to OpenAI for {call_direction} call')
@@ -930,8 +937,8 @@ async def send_session_update(openai_ws, call_direction="incoming", recipient_na
         await openai_ws.send(json.dumps(session_update))
         logger.info('Session update sent successfully')
         
-        # Wait a moment for the session to initialize properly
-        await asyncio.sleep(1)
+        # Reduce session initialization wait time
+        await asyncio.sleep(0.5)  # Reduced from 1 second
     except Exception as e:
         logger.error(f"Error sending session update: {str(e)}")
         logger.error(traceback.format_exc())
