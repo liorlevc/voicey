@@ -28,6 +28,39 @@ templates = Jinja2Templates(directory=templates_dir)
 if not os.path.exists(templates_dir):
     os.makedirs(templates_dir)
 
+# Create a directory for audio files if it doesn't exist
+audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
+if not os.path.exists(audio_dir):
+    os.makedirs(audio_dir)
+
+# Path to the trigger audio file - this will be created if it doesn't exist
+TRIGGER_AUDIO_PATH = os.path.join(audio_dir, "trigger.txt")
+
+# Create a silent audio file in base64 format if it doesn't exist
+# This is a short segment of silence in G.711 u-law format
+def create_silent_audio_file():
+    if not os.path.exists(TRIGGER_AUDIO_PATH):
+        # This is a base64-encoded representation of a short segment of silence in G.711 u-law format
+        silent_audio_base64 = "//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
+        with open(TRIGGER_AUDIO_PATH, 'w') as f:
+            f.write(silent_audio_base64)
+        logger.info(f"Created silent audio file at {TRIGGER_AUDIO_PATH}")
+    else:
+        logger.info(f"Silent audio file already exists at {TRIGGER_AUDIO_PATH}")
+
+# Read the trigger audio file
+def get_trigger_audio():
+    try:
+        with open(TRIGGER_AUDIO_PATH, 'r') as f:
+            return f.read()
+    except Exception as e:
+        logger.error(f"Error reading trigger audio file: {str(e)}")
+        # Return a fallback silent audio segment if the file can't be read
+        return "//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
+
+# Create the silent audio file when the server starts
+create_silent_audio_file()
+
 load_dotenv()
 # Configuration
 OPENAI_API_KEY = os.getenv(
@@ -260,6 +293,7 @@ async def handle_media_stream(websocket: WebSocket):
             
             # Flag to track if we've triggered AI speech for outgoing calls
             speech_triggered = False
+            trigger_audio_sent = False
             
             # Store buffered audio data during reconnection
             audio_buffer = []
@@ -267,7 +301,7 @@ async def handle_media_stream(websocket: WebSocket):
 
             async def receive_from_twilio():
                 """Receive audio data from Twilio and send it to the OpenAI Realtime API."""
-                nonlocal stream_sid, connection_active, audio_buffer, speech_triggered
+                nonlocal stream_sid, connection_active, audio_buffer, speech_triggered, trigger_audio_sent
                 try:
                     async for message in websocket.iter_text():
                         if not connection_active:
@@ -300,11 +334,9 @@ async def handle_media_stream(websocket: WebSocket):
                             if call_direction == "outgoing" and not speech_triggered and stream_sid:
                                 await asyncio.sleep(1)  # Give a short delay for connection to stabilize
                                 
-                                # Send a simple text message to trigger speech
                                 try:
-                                    logger.info("Triggering AI speech for outgoing call")
-                                    
-                                    # Try the prompt approach first
+                                    # First send a text message to trigger the AI
+                                    logger.info("Sending initial text trigger for outgoing call")
                                     trigger_message = {
                                         "type": "message",
                                         "message": {
@@ -313,19 +345,37 @@ async def handle_media_stream(websocket: WebSocket):
                                         }
                                     }
                                     await openai_ws.send(json.dumps(trigger_message))
-                                    logger.info("Sent trigger message")
                                     
+                                    # Wait a moment
                                     await asyncio.sleep(0.5)
                                     
-                                    # Send a content text to initiate AI response
+                                    # Then send silent audio to trigger voice activation
+                                    logger.info("Sending trigger audio to start AI speaking")
+                                    trigger_audio = get_trigger_audio()
+                                    
+                                    # Send the trigger audio multiple times to ensure it's processed
+                                    for _ in range(3):  # Send 3 audio packets
+                                        audio_append = {
+                                            "type": "input_audio_buffer.append",
+                                            "audio": trigger_audio
+                                        }
+                                        await openai_ws.send(json.dumps(audio_append))
+                                        await asyncio.sleep(0.1)  # Small delay between packets
+                                    
+                                    # Mark as triggered
+                                    trigger_audio_sent = True
+                                    logger.info("Trigger audio sent successfully")
+                                    
+                                    # Send another text message as backup
                                     content_message = {
                                         "type": "content.text",
-                                        "content": "שלום, זאת שיחה בנושא הובלות"  # "Hello, this is a call about moving services"
+                                        "content": "שלום, אני רוצה לשמוע על שירותי ההובלה שלכם"
                                     }
                                     await openai_ws.send(json.dumps(content_message))
-                                    logger.info("Sent content text message")
                                     
                                     speech_triggered = True
+                                    logger.info("All AI speech triggers sent for outgoing call")
+                                    
                                 except Exception as e:
                                     logger.error(f"Error triggering AI speech: {e}")
                                     logger.error(traceback.format_exc())
