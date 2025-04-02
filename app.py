@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import uvicorn
 import logging
 import traceback
+import random
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -138,9 +139,9 @@ async def handle_outgoing_call(request: Request):
         logger.info("Outgoing call connected")
         response = VoiceResponse()
         
-        # Hebrew greeting for outgoing calls
-        response.say("שלום, זו רעות מאפליקציית תוביל אותי", language="he-IL", voice="woman")
-        response.pause(length=1)
+        # Clearer Hebrew greeting for outgoing calls with pause
+        response.say("שלום, מתחברים לשיחה. רגע בבקשה.", language="he-IL", voice="woman")
+        response.pause(length=2)  # Longer pause to ensure the connection is established
         
         # Get the host for WebSocket connection
         host = request.url.hostname
@@ -252,21 +253,37 @@ async def handle_media_stream(websocket: WebSocket):
             await send_session_update(openai_ws)
             stream_sid = None
             
-            # Wait briefly for the session to initialize
-            await asyncio.sleep(2)
+            # Wait longer for the session to initialize fully for outgoing calls
+            if call_direction == "outgoing":
+                await asyncio.sleep(3)
+            else:
+                await asyncio.sleep(2)
             
             # For outgoing calls, send initial message to start the conversation
-            if call_direction == "outgoing":
-                logger.info("Sending initial message for outgoing call")
-                initial_message = {
+            if call_direction == "outgoing" and openai_ws and not openai_ws.closed:
+                logger.info("Sending initial content for outgoing call")
+                
+                # First trigger with content.text format
+                initial_text = {
+                    "type": "content.text",
+                    "content": "שלום, זו רעות מאפליקציית 'תוביל אותי'. אני מתקשרת לבדוק אם אתה מעוניין בשירותי הובלה. האם זה זמן טוב לשיחה?"
+                }
+                await openai_ws.send(json.dumps(initial_text))
+                logger.info("Initial text content sent for outgoing call")
+                
+                # Give it a moment to process
+                await asyncio.sleep(0.5)
+                
+                # Then follow up with another message to ensure it speaks
+                follow_up = {
                     "type": "message",
                     "message": {
-                        "role": "assistant",
-                        "content": "שלום, זו רעות מאפליקציית 'תוביל אותי'. אני מתקשרת לבדוק אם אתה מעוניין בשירותי הובלה. האם זה זמן טוב לשיחה? אשמח לדעת את שמך ולעזור לך למצוא את חברת ההובלה המתאימה ביותר עבורך."
+                        "role": "user",
+                        "content": "בבקשה ספרי לי על שירותי ההובלה שלכם"
                     }
                 }
-                await openai_ws.send(json.dumps(initial_message))
-                logger.info("Initial message sent for outgoing call")
+                await openai_ws.send(json.dumps(follow_up))
+                logger.info("Follow up message sent for outgoing call")
             else:
                 # No initial message for incoming calls - wait for user to speak
                 logger.info("Session initialized, waiting for audio from Twilio")
@@ -321,17 +338,27 @@ async def handle_media_stream(websocket: WebSocket):
                 try:
                     async for openai_message in openai_ws:
                         response = json.loads(openai_message)
+                        
+                        # Log all events for better debugging
+                        logger.info(f"OpenAI event: {response['type']}")
+                        
                         if response['type'] in LOG_EVENT_TYPES:
-                            logger.info(f"Received event: {response['type']}")
                             if 'error' in response:
                                 logger.error(f"OpenAI error: {response['error']}")
+                        
                         if response['type'] == 'session.updated':
                             logger.info("Session updated successfully")
-                        if response[
-                                'type'] == 'response.audio.delta' and response.get(
-                                'delta') and stream_sid:
+                            
+                        if response['type'] == 'response.content.delta':
+                            logger.info(f"Content delta received: {response.get('delta', '')}")
+                        
+                        if response['type'] == 'response.audio.delta' and response.get('delta') and stream_sid:
                             # Audio from OpenAI
                             try:
+                                # Log every 50th audio packet to avoid excessive logging
+                                if random.randint(1, 50) == 1:
+                                    logger.info("Audio delta received from OpenAI")
+                                
                                 audio_payload = base64.b64encode(
                                     base64.b64decode(
                                         response['delta'])).decode('utf-8')
