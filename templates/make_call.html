@@ -115,6 +115,18 @@
         <small>This audio will be played to trigger the AI to speak when the call connects</small>
     </div>
     
+    <div class="form-group">
+        <label for="custom-script">Custom System Script (optional):</label>
+        <div style="display: flex; margin-bottom: 5px;">
+            <button onclick="loadDefaultScript()" style="background-color: #2196F3; margin-right: 5px;">Load Default</button>
+            <button onclick="saveScript()" style="background-color: #4CAF50; margin-right: 5px;">Save Script</button>
+            <button onclick="loadScript()" style="background-color: #ff9800;">Load Saved Script</button>
+        </div>
+        <textarea id="custom-script" rows="10" style="width: 100%; padding: 8px; font-family: monospace; direction: rtl;"
+            placeholder="Enter custom system instructions for the AI here..."></textarea>
+        <small>Create a custom script that will be sent to the AI for this call. Hebrew text should be entered from right to left.</small>
+    </div>
+    
     <h2>Phone Numbers and Names</h2>
     <div id="call-list" class="call-list">
         <div class="call-entry">
@@ -172,6 +184,53 @@
         const callHistory = [];
         let currentCall = null;
         let triggerAudioBase64 = null;
+        let customScript = null;
+        
+        // Default system message
+        const DEFAULT_SYSTEM_SCRIPT = `שמך מיכל, את נציגת שירות טלפוני, כל מי שפותח איתך שיחה, תעני שלום בנימוס ותציגי את עצמך, תציעי למי שמדבר איתך הצעה מעניינת למעבר דירה ותבררי האם זה רלוונטי והאם הוא מעוניין לשמוע, אם הוא לא מעוניין לשמוע אל תמשיכי בשיחה ואל תסבירי במה מדובר, אם הוא מעוניין לשמוע, תספרי לו על כך שהוא יכול להשתמש באפליקציית תוביל אותי להובלת דירה בראש שקט, המטרה שלך היא להיות נחמדה, נלהבת, סוחפת אבל עניינית, מקצועית, ולא לחשוף מידע אם הלקוח אינו מסכים לשמוע על ההצעה
+
+בשיחות יוצאות, כשאת מתקשרת ללקוח: התחילי לדבר מיד ברגע שהשיחה מתחברת, בלי לחכות שהלקוח ידבר קודם. הציגי את עצמך: 'שלום מדברת מיכל, אני מתקשרת בכדי לברר האם אתה מתכנן מעבר דירה בקרוב? והאם תרצה לשמוע את ההצעה?' והמשיכי את השיחה בהתאם לתגובת הלקוח.`;
+        
+        // Load default script into textarea
+        function loadDefaultScript() {
+            document.getElementById('custom-script').value = DEFAULT_SYSTEM_SCRIPT;
+        }
+        
+        // Save script to localStorage
+        function saveScript() {
+            const scriptText = document.getElementById('custom-script').value.trim();
+            if (!scriptText) {
+                alert('Please enter a script to save');
+                return;
+            }
+            
+            localStorage.setItem('customScript', scriptText);
+            alert('Script saved successfully!');
+        }
+        
+        // Load script from localStorage
+        function loadScript() {
+            const savedScript = localStorage.getItem('customScript');
+            if (savedScript) {
+                document.getElementById('custom-script').value = savedScript;
+                alert('Script loaded successfully!');
+            } else {
+                alert('No saved script found');
+            }
+        }
+        
+        // Check if there's a saved script on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedScript = localStorage.getItem('customScript');
+            if (savedScript) {
+                // Just show a notification that there's a saved script
+                const scriptField = document.getElementById('custom-script');
+                scriptField.placeholder = "There is a saved script available. Click 'Load Saved Script' to use it.";
+            } else {
+                // Pre-load the default script
+                loadDefaultScript();
+            }
+        });
         
         // Handle file upload and conversion to base64
         document.getElementById('trigger-audio').addEventListener('change', function(event) {
@@ -324,6 +383,12 @@
                 // Add the trigger audio if present
                 if (triggerAudioBase64) {
                     formData.append('trigger_audio', triggerAudioBase64);
+                }
+                
+                // Add custom script if present
+                const customScriptText = document.getElementById('custom-script').value.trim();
+                if (customScriptText) {
+                    formData.append('custom_script', customScriptText);
                 }
                 
                 const response = await fetch('/make-call', {

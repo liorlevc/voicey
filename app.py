@@ -300,7 +300,8 @@ async def make_outgoing_call(
     phone_number: str = Form(...),
     webhook_url: str = Form(None),
     recipient_name: str = Form(None),
-    trigger_audio: str = Form(None)
+    trigger_audio: str = Form(None),
+    custom_script: str = Form(None)
 ):
     """Initiate an outgoing call to the specified phone number."""
     try:
@@ -339,6 +340,30 @@ async def make_outgoing_call(
                 logger.error(traceback.format_exc())
                 custom_audio_path = None
         
+        # Store custom script if provided
+        custom_script_path = None
+        if custom_script and len(custom_script) > 0:
+            # Create scripts directory if it doesn't exist
+            scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
+            if not os.path.exists(scripts_dir):
+                os.makedirs(scripts_dir)
+                logger.info(f"Created directory for custom scripts at {scripts_dir}")
+            
+            # Generate a unique filename for this script
+            timestamp = int(time.time())
+            custom_script_path = os.path.join(scripts_dir, f"script_{timestamp}.txt")
+            
+            # Save the script file
+            try:
+                with open(custom_script_path, 'w') as f:
+                    f.write(custom_script)
+                
+                logger.info(f"Saved custom script to {custom_script_path} ({len(custom_script)} bytes)")
+            except Exception as e:
+                logger.error(f"Error saving custom script: {str(e)}")
+                logger.error(traceback.format_exc())
+                custom_script_path = None
+        
         # Parameters to pass to the call handler
         params = {}
         if recipient_name:
@@ -348,6 +373,10 @@ async def make_outgoing_call(
         if custom_audio_path:
             params["custom_audio_path"] = os.path.basename(custom_audio_path)
             logger.info(f"Call will use custom audio: {os.path.basename(custom_audio_path)}")
+            
+        if custom_script_path:
+            params["custom_script_path"] = os.path.basename(custom_script_path)
+            logger.info(f"Call will use custom script: {os.path.basename(custom_script_path)}")
         
         # Build the URL with properly encoded query parameters
         media_url = f"{webhook_url}/outgoing-call-handler"
@@ -405,7 +434,8 @@ async def make_outgoing_call(
 async def handle_outgoing_call(
     request: Request,
     recipient_name: Optional[str] = None,
-    custom_audio_path: Optional[str] = None
+    custom_audio_path: Optional[str] = None,
+    custom_script_path: Optional[str] = None
 ):
     """Handle the outgoing call once it's answered."""
     try:
@@ -414,6 +444,7 @@ async def handle_outgoing_call(
         # Log the parameters received
         logger.info(f"Recipient name: {recipient_name}")
         logger.info(f"Custom audio path: {custom_audio_path}")
+        logger.info(f"Custom script path: {custom_script_path}")
         
         # Capture call SID if available
         call_sid = None
@@ -425,6 +456,10 @@ async def handle_outgoing_call(
             if call_sid in active_calls:
                 active_calls[call_sid]["status"] = "in-progress"
                 active_calls[call_sid]["answer_time"] = datetime.now()
+                
+                # Store script path if provided
+                if custom_script_path:
+                    active_calls[call_sid]["custom_script_path"] = custom_script_path
         
         response = VoiceResponse()
         
@@ -446,6 +481,8 @@ async def handle_outgoing_call(
             stream_params.append(f"recipient_name={urllib.parse.quote(recipient_name)}")
         if custom_audio_path:
             stream_params.append(f"custom_audio_path={urllib.parse.quote(custom_audio_path)}")
+        if custom_script_path:
+            stream_params.append(f"custom_script_path={urllib.parse.quote(custom_script_path)}")
         if call_sid:
             stream_params.append(f"call_sid={urllib.parse.quote(call_sid)}")
             
@@ -575,6 +612,10 @@ async def handle_media_stream(websocket: WebSocket):
         custom_audio_path = None
         if "custom_audio_path" in query_params:
             custom_audio_path = urllib.parse.unquote(query_params.get("custom_audio_path"))
+        
+        custom_script_path = None
+        if "custom_script_path" in query_params:
+            custom_script_path = urllib.parse.unquote(query_params.get("custom_script_path"))
             
         call_sid = None
         if "call_sid" in query_params:
@@ -583,6 +624,7 @@ async def handle_media_stream(websocket: WebSocket):
         logger.info(f"Call direction: {call_direction}")
         logger.info(f"Recipient name: {recipient_name}")
         logger.info(f"Custom audio path: {custom_audio_path}")
+        logger.info(f"Custom script path: {custom_script_path}")
         logger.info(f"Call SID: {call_sid}")
         
         await websocket.accept()
@@ -592,7 +634,7 @@ async def handle_media_stream(websocket: WebSocket):
             openai_ws = await connect_to_openai()
             
             # First send session update to configure the connection with call direction and recipient name
-            await send_session_update(openai_ws, call_direction, recipient_name)
+            await send_session_update(openai_ws, call_direction, recipient_name, custom_script_path)
             stream_sid = None
             
             # Wait for session to initialize
@@ -841,14 +883,30 @@ async def handle_media_stream(websocket: WebSocket):
             pass
 
 
-async def send_session_update(openai_ws, call_direction="incoming", recipient_name=None):
+async def send_session_update(openai_ws, call_direction="incoming", recipient_name=None, custom_script_path=None):
     """Send session update to OpenAI WebSocket."""
     try:
         # For outgoing calls, prioritize audio over text for immediate speaking
         modalities = ["text", "audio"] if call_direction == "incoming" else ["audio", "text"]
         
-        # Get the system message with recipient name if provided
-        system_message = get_system_message(recipient_name)
+        # Get custom script if provided
+        system_message = None
+        if custom_script_path:
+            scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
+            full_script_path = os.path.join(scripts_dir, custom_script_path)
+            if os.path.exists(full_script_path):
+                try:
+                    with open(full_script_path, 'r') as f:
+                        system_message = f.read().strip()
+                    logger.info(f"Using custom script from {custom_script_path}")
+                except Exception as e:
+                    logger.error(f"Error reading custom script: {str(e)}")
+                    logger.error(traceback.format_exc())
+        
+        # Fall back to default if no custom script was provided or could be read
+        if not system_message:
+            system_message = get_system_message(recipient_name)
+            logger.info("Using default system message")
         
         session_update = {
             "type": "session.update",
