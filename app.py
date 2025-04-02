@@ -146,9 +146,9 @@ async def handle_outgoing_call(request: Request):
         host = request.url.hostname
         logger.info(f"Host for WebSocket connection: {host}")
         
-        # Set up streaming
+        # Set up streaming with call direction parameter to indicate outgoing call
         connect = Connect()
-        stream_url = f'wss://{host}/media-stream'
+        stream_url = f'wss://{host}/media-stream?direction=outgoing'
         logger.info(f"Setting up stream URL: {stream_url}")
         connect.stream(url=stream_url)
         response.append(connect)
@@ -179,9 +179,9 @@ async def handle_incoming_call(request: Request):
         host = request.url.hostname
         logger.info(f"Host for WebSocket connection: {host}")
         
-        # Set up streaming
+        # Set up streaming with call direction parameter
         connect = Connect()
-        stream_url = f'wss://{host}/media-stream'
+        stream_url = f'wss://{host}/media-stream?direction=incoming'
         logger.info(f"Setting up stream URL: {stream_url}")
         connect.stream(url=stream_url)
         response.append(connect)
@@ -237,6 +237,11 @@ async def handle_media_stream(websocket: WebSocket):
     logger.info("Received WebSocket connection request")
     
     try:
+        # Get query parameters 
+        query_params = websocket.query_params
+        call_direction = query_params.get("direction", "incoming")
+        logger.info(f"Call direction: {call_direction}")
+        
         await websocket.accept()
         logger.info("WebSocket connection accepted")
 
@@ -250,8 +255,21 @@ async def handle_media_stream(websocket: WebSocket):
             # Wait briefly for the session to initialize
             await asyncio.sleep(2)
             
-            # No initial message - let the audio from Twilio trigger responses
-            logger.info("Session initialized, waiting for audio from Twilio")
+            # For outgoing calls, send initial message to start the conversation
+            if call_direction == "outgoing":
+                logger.info("Sending initial message for outgoing call")
+                initial_message = {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": "שלום, זו רעות מאפליקציית 'תוביל אותי'. אני מתקשרת לבדוק אם אתה מעוניין בשירותי הובלה. האם זה זמן טוב לשיחה? אשמח לדעת את שמך ולעזור לך למצוא את חברת ההובלה המתאימה ביותר עבורך."
+                    }
+                }
+                await openai_ws.send(json.dumps(initial_message))
+                logger.info("Initial message sent for outgoing call")
+            else:
+                # No initial message for incoming calls - wait for user to speak
+                logger.info("Session initialized, waiting for audio from Twilio")
 
             # Store buffered audio data during reconnection
             audio_buffer = []
