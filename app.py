@@ -18,6 +18,7 @@ import random
 import time
 from datetime import datetime
 from typing import Dict, Optional, List
+import urllib.parse
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -245,10 +246,17 @@ async def make_outgoing_call(
             params["custom_audio_path"] = os.path.basename(custom_audio_path)
             logger.info(f"Call will use custom audio: {os.path.basename(custom_audio_path)}")
         
-        # Build the URL with query parameters
+        # Build the URL with properly encoded query parameters
         media_url = f"{webhook_url}/outgoing-call-handler"
         if params:
-            query_string = "&".join([f"{key}={value}" for key, value in params.items()])
+            # Properly URL-encode each parameter, especially for non-ASCII characters
+            encoded_params = []
+            for key, value in params.items():
+                encoded_key = urllib.parse.quote(key)
+                encoded_value = urllib.parse.quote(value)
+                encoded_params.append(f"{encoded_key}={encoded_value}")
+            
+            query_string = "&".join(encoded_params)
             media_url = f"{media_url}?{query_string}"
         
         logger.info(f"Initiating outgoing call to {phone_number}")
@@ -328,14 +336,14 @@ async def handle_outgoing_call(
         host = request.url.hostname
         logger.info(f"Host for WebSocket connection: {host}")
         
-        # Build WebSocket URL with parameters
+        # Build WebSocket URL with properly encoded parameters
         stream_params = ["direction=outgoing"]
         if recipient_name:
-            stream_params.append(f"recipient_name={recipient_name}")
+            stream_params.append(f"recipient_name={urllib.parse.quote(recipient_name)}")
         if custom_audio_path:
-            stream_params.append(f"custom_audio_path={custom_audio_path}")
+            stream_params.append(f"custom_audio_path={urllib.parse.quote(custom_audio_path)}")
         if call_sid:
-            stream_params.append(f"call_sid={call_sid}")
+            stream_params.append(f"call_sid={urllib.parse.quote(call_sid)}")
             
         query_string = "&".join(stream_params)
         
@@ -454,9 +462,19 @@ async def handle_media_stream(websocket: WebSocket):
         # Get query parameters 
         query_params = websocket.query_params
         call_direction = query_params.get("direction", "incoming")
-        recipient_name = query_params.get("recipient_name")
-        custom_audio_path = query_params.get("custom_audio_path")
-        call_sid = query_params.get("call_sid")
+        
+        # URL-decode the parameters
+        recipient_name = None
+        if "recipient_name" in query_params:
+            recipient_name = urllib.parse.unquote(query_params.get("recipient_name"))
+            
+        custom_audio_path = None
+        if "custom_audio_path" in query_params:
+            custom_audio_path = urllib.parse.unquote(query_params.get("custom_audio_path"))
+            
+        call_sid = None
+        if "call_sid" in query_params:
+            call_sid = urllib.parse.unquote(query_params.get("call_sid"))
         
         logger.info(f"Call direction: {call_direction}")
         logger.info(f"Recipient name: {recipient_name}")
