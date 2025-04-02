@@ -17,7 +17,7 @@ import traceback
 import random
 import time
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 import urllib.parse
 
 # Set up logging
@@ -41,6 +41,7 @@ if not os.path.exists(audio_dir):
 uploaded_audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploaded_audio")
 if not os.path.exists(uploaded_audio_dir):
     os.makedirs(uploaded_audio_dir)
+    logger.info(f"Created directory for uploaded audio at {uploaded_audio_dir}")
 
 # Path to the trigger audio file - this will be created if it doesn't exist
 TRIGGER_AUDIO_PATH = os.path.join(audio_dir, "trigger.txt")
@@ -53,7 +54,7 @@ active_calls: Dict[str, Dict] = {}
 def create_silent_audio_file():
     if not os.path.exists(TRIGGER_AUDIO_PATH):
         # This is a base64-encoded representation of a short segment of silence in G.711 u-law format
-        silent_audio_base64 = "//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
+        silent_audio_base64 = "//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
         with open(TRIGGER_AUDIO_PATH, 'w') as f:
             f.write(silent_audio_base64)
         logger.info(f"Created silent audio file at {TRIGGER_AUDIO_PATH}")
@@ -152,6 +153,17 @@ async def test_endpoint():
     """Test endpoint to check if the server is responsive."""
     return JSONResponse({"status": "ok", "message": "Server is running correctly"})
 
+# Helper function to make dictionaries JSON-serializable
+def serialize_for_json(obj: Any) -> Any:
+    """Convert non-serializable objects to serializable ones."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: serialize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    return obj
+
 # Endpoint to check call status
 @app.get("/call-status")
 async def get_call_status(call_sid: str = Query(...)):
@@ -171,7 +183,9 @@ async def get_call_status(call_sid: str = Query(...)):
             if "end_time" in call_info and "start_time" in call_info:
                 call_info["duration"] = int((call_info["end_time"] - call_info["start_time"]).total_seconds())
             
-            return JSONResponse(call_info)
+            # Make sure all data is JSON-serializable
+            serialized_call_info = serialize_for_json(call_info)
+            return JSONResponse(serialized_call_info)
         
         # If not found locally, fetch from Twilio
         call = twilio_client.calls(call_sid).fetch()
@@ -221,20 +235,30 @@ async def make_outgoing_call(
         # Get the host URL for webhooks if not provided
         if not webhook_url:
             # This assumes the request is coming through a proxy that sets the Host header
-            webhook_url = "https://your-app-url.com"
+            webhook_url = request.headers.get('host')
+            if webhook_url:
+                scheme = "https" if request.url.scheme == "https" else "http"
+                webhook_url = f"{scheme}://{webhook_url}"
+            else:
+                webhook_url = "https://your-app-url.com"
         
         # Store custom trigger audio if provided
         custom_audio_path = None
-        if trigger_audio:
+        if trigger_audio and len(trigger_audio) > 0:
             # Generate a unique filename for this audio
             timestamp = int(time.time())
             custom_audio_path = os.path.join(uploaded_audio_dir, f"trigger_{timestamp}.txt")
             
             # Save the audio file
-            with open(custom_audio_path, 'w') as f:
-                f.write(trigger_audio)
-            
-            logger.info(f"Saved custom trigger audio to {custom_audio_path}")
+            try:
+                with open(custom_audio_path, 'w') as f:
+                    f.write(trigger_audio)
+                
+                logger.info(f"Saved custom trigger audio to {custom_audio_path} ({len(trigger_audio)} bytes)")
+            except Exception as e:
+                logger.error(f"Error saving trigger audio: {str(e)}")
+                logger.error(traceback.format_exc())
+                custom_audio_path = None
         
         # Parameters to pass to the call handler
         params = {}
@@ -285,6 +309,7 @@ async def make_outgoing_call(
         
         logger.info(f"Call initiated with SID: {call.sid}")
         
+        # Use the serialize_for_json function for the response
         return JSONResponse({
             "status": "success",
             "message": "Call initiated",
@@ -493,9 +518,14 @@ async def handle_media_stream(websocket: WebSocket):
                 try:
                     audio_file_path = os.path.join(uploaded_audio_dir, custom_audio_path)
                     logger.info(f"Loading custom audio from {audio_file_path}")
-                    with open(audio_file_path, 'r') as f:
-                        custom_trigger_audio = f.read()
-                    logger.info(f"Successfully loaded custom audio ({len(custom_trigger_audio)} bytes)")
+                    
+                    # Check if file exists
+                    if os.path.exists(audio_file_path):
+                        with open(audio_file_path, 'r') as f:
+                            custom_trigger_audio = f.read()
+                        logger.info(f"Successfully loaded custom audio ({len(custom_trigger_audio)} bytes)")
+                    else:
+                        logger.error(f"Custom audio file not found at {audio_file_path}")
                 except Exception as e:
                     logger.error(f"Error loading custom audio: {str(e)}")
                     logger.error(traceback.format_exc())
@@ -565,18 +595,30 @@ async def handle_media_stream(websocket: WebSocket):
                                     # Wait a moment
                                     await asyncio.sleep(0.5)
                                     
+                                    # Send human-like trigger messages to get AI to respond
+                                    content_message1 = {
+                                        "type": "content.text",
+                                        "content": "היי."  # "Hi."
+                                    }
+                                    await openai_ws.send(json.dumps(content_message1))
+                                    await asyncio.sleep(0.2)
+                                    
                                     # Then send audio to trigger voice activation (custom or default)
                                     logger.info("Sending trigger audio to start AI speaking")
                                     trigger_audio = custom_trigger_audio if custom_trigger_audio else get_trigger_audio()
                                     
+                                    # Log the first 50 chars of the audio to verify it's not empty
+                                    logger.info(f"Trigger audio sample: {trigger_audio[:50]}")
+                                    
                                     # Send the trigger audio multiple times to ensure it's processed
-                                    for _ in range(3):  # Send 3 audio packets
+                                    for i in range(5):  # Increased to 5 packets for better chance of triggering
                                         audio_append = {
                                             "type": "input_audio_buffer.append",
                                             "audio": trigger_audio
                                         }
                                         await openai_ws.send(json.dumps(audio_append))
                                         await asyncio.sleep(0.1)  # Small delay between packets
+                                        logger.info(f"Sent audio packet {i+1}/5")
                                     
                                     # Mark as triggered
                                     trigger_audio_sent = True
@@ -588,11 +630,18 @@ async def handle_media_stream(websocket: WebSocket):
                                         greeting_content = f"שלום {recipient_name}, אני רוצה לשמוע על שירותי ההובלה שלכם" 
                                     
                                     # Send another text message as backup
-                                    content_message = {
+                                    content_message2 = {
                                         "type": "content.text",
                                         "content": greeting_content
                                     }
-                                    await openai_ws.send(json.dumps(content_message))
+                                    await openai_ws.send(json.dumps(content_message2))
+                                    
+                                    # Force speech action as final fallback
+                                    force_speech = {
+                                        "type": "content.speech",
+                                        "content": "האם יש לכם שרותי הובלה?" # "Do you have moving services?"
+                                    }
+                                    await openai_ws.send(json.dumps(force_speech))
                                     
                                     speech_triggered = True
                                     logger.info("All AI speech triggers sent for outgoing call")
