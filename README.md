@@ -46,6 +46,33 @@ ngrok http 8000
    https://your-ngrok-domain.ngrok.io/incoming-call
    ```
 
+## Outgoing Calls
+
+The system now supports making outgoing calls:
+
+1. Add your Twilio credentials to the .env file:
+   ```
+   TWILIO_ACCOUNT_SID=your_twilio_account_sid
+   TWILIO_AUTH_TOKEN=your_twilio_auth_token
+   TWILIO_PHONE_NUMBER=your_twilio_phone_number
+   ```
+
+2. Access the call form at `/call-form`
+
+3. Enter the phone number in international format (e.g., +972123456789)
+
+4. The system will call the number and connect the recipient to the AI assistant
+
+## API Endpoints
+
+- `/` - Home page
+- `/test` - Simple endpoint to test if the API is running
+- `/incoming-call` - Webhook for incoming Twilio calls
+- `/call-form` - HTML form to make outgoing calls
+- `/make-call` - API endpoint to initiate outgoing calls
+- `/outgoing-call-handler` - TwiML for outgoing calls
+- `/media-stream` - WebSocket endpoint for audio streaming
+
 ## Testing
 
 Make a call to your Twilio phone number to test the system. The AI assistant will answer in Hebrew and provide help with finding moving companies. 

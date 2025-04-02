@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Make Outgoing Call</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>Make an Outgoing Call</h1>
+    
+    <div class="form-group">
+        <label for="phone">Phone Number (international format, e.g., +972123456789):</label>
+        <input type="text" id="phone" name="phone" placeholder="+972123456789" required>
+    </div>
+    
+    <button onclick="makeCall()">Make Call</button>
+    
+    <div id="result" class="result"></div>
+    
+    <script>
+        async function makeCall() {
+            const phoneNumber = document.getElementById('phone').value;
+            const resultDiv = document.getElementById('result');
+            
+            if (!phoneNumber) {
+                alert('Please enter a phone number');
+                return;
+            }
+            
+            resultDiv.innerHTML = 'Initiating call...';
+            resultDiv.style.display = 'block';
+            
+            try {
+                const formData = new FormData();
+                formData.append('phone_number', phoneNumber);
+                
+                // Get the current URL to use as webhook_url
+                const currentURL = window.location.origin;
+                formData.append('webhook_url', currentURL);
+                
+                const response = await fetch('/make-call', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `
+                        <p>Call initiated successfully!</p>
+                        <p>Call SID: ${data.call_sid}</p>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <p>Error: ${data.detail || 'Unknown error'}</p>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <p>Error: ${error.message}</p>
+                `;
+            }
+        }
+    </script>
+</body>
+</html> 
