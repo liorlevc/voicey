@@ -3,7 +3,7 @@ import json
 import base64
 import asyncio
 import websockets
-from fastapi import FastAPI, WebSocket, Request, Form, HTTPException
+from fastapi import FastAPI, WebSocket, Request, Form, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.websockets import WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +15,9 @@ import uvicorn
 import logging
 import traceback
 import random
+import time
+from datetime import datetime
+from typing import Dict, Optional, List
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -33,15 +36,23 @@ audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
 if not os.path.exists(audio_dir):
     os.makedirs(audio_dir)
 
+# Create a directory for uploaded trigger audio if it doesn't exist
+uploaded_audio_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploaded_audio")
+if not os.path.exists(uploaded_audio_dir):
+    os.makedirs(uploaded_audio_dir)
+
 # Path to the trigger audio file - this will be created if it doesn't exist
 TRIGGER_AUDIO_PATH = os.path.join(audio_dir, "trigger.txt")
+
+# Dictionary to store call information
+active_calls: Dict[str, Dict] = {}
 
 # Create a silent audio file in base64 format if it doesn't exist
 # This is a short segment of silence in G.711 u-law format
 def create_silent_audio_file():
     if not os.path.exists(TRIGGER_AUDIO_PATH):
         # This is a base64-encoded representation of a short segment of silence in G.711 u-law format
-        silent_audio_base64 = "//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
+        silent_audio_base64 = "//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
         with open(TRIGGER_AUDIO_PATH, 'w') as f:
             f.write(silent_audio_base64)
         logger.info(f"Created silent audio file at {TRIGGER_AUDIO_PATH}")
@@ -74,14 +85,34 @@ twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
     twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-SYSTEM_MESSAGE = (
-" שמך רעות ואת נציגת שירות של אפליקציית 'תוביל אותי', שמתמחה במציאת חברות הובלה ללקוחות. את דוברת עברית ויודעת להציע תמיכה מועילה ונעימה. התשובות שלך צריכות להיות ישירות, חמות וקלות להבנה, ולא להגזים במילים. חשוב להיות קשובה לצרכים של הלקוח ולהגיב בנימה נלהבת אך טבעית, כאילו מדובר בשיחה עם אדם אמיתי ולא עם מערכת אוטומטית. התשובות שלך צריכות להיות פשוטות, ענייניות, עם חיוך ותחושת קבלה, לא יותר מדי פורמליות. תמיד תהיי זמינה לשאלות, ותשני את הטון שלך לפי הצורך של הלקוח – אם הוא צריך עזרה או טיפים למעבר דירה, אם הוא רק רוצה לברר משהו, או אם הוא צריך עזרה בשימוש באפליקציה."
+# Base system message template
+SYSTEM_MESSAGE_TEMPLATE = """
+שמך רעות ואת נציגת שירות של אפליקציית 'תוביל אותי', שמתמחה במציאת חברות הובלה ללקוחות. את דוברת עברית ויודעת להציע תמיכה מועילה ונעימה. התשובות שלך צריכות להיות ישירות, חמות וקלות להבנה, ולא להגזים במילים. חשוב להיות קשובה לצרכים של הלקוח ולהגיב בנימה נלהבת אך טבעית, כאילו מדובר בשיחה עם אדם אמיתי ולא עם מערכת אוטומטית. התשובות שלך צריכות להיות פשוטות, ענייניות, עם חיוך ותחושת קבלה, לא יותר מדי פורמליות. תמיד תהיי זמינה לשאלות, ותשני את הטון שלך לפי הצורך של הלקוח – אם הוא צריך עזרה או טיפים למעבר דירה, אם הוא רק רוצה לברר משהו, או אם הוא צריך עזרה בשימוש באפליקציה.
 
-"מיד בתחילת השיחה, שאלי את הלקוח לשמו כדי ליצור קשר אישי, והראי התעניינות כנה. כאשר לקוח זקוק לעזרה במציאת הובלה או בשימוש באפליקציה, הסבירי את התהליך במלואו: קודם צריך להתחבר לאפליקציה, לבחור את הפריטים להובלה מתוך הקטגוריות שבאתר, לסמן את הכמות של כל פריט, ולציין האם נדרש גם פירוק והרכבה לכל פריט. לאחר מכן, יש למלא את פרטי ההובלה ואת היעד. בסיום התהליך, הלקוח יקבל באפליקציה הצעות מחיר ממובילים שונים, והוא יוכל לבחור את המוביל המתאים לו ביותר לפי שיקול דעתו."
+מיד בתחילת השיחה, {name_instruction} והראי התעניינות כנה. כאשר לקוח זקוק לעזרה במציאת הובלה או בשימוש באפליקציה, הסבירי את התהליך במלואו: קודם צריך להתחבר לאפליקציה, לבחור את הפריטים להובלה מתוך הקטגוריות שבאתר, לסמן את הכמות של כל פריט, ולציין האם נדרש גם פירוק והרכבה לכל פריט. לאחר מכן, יש למלא את פרטי ההובלה ואת היעד. בסיום התהליך, הלקוח יקבל באפליקציה הצעות מחיר ממובילים שונים, והוא יוכל לבחור את המוביל המתאים לו ביותר לפי שיקול דעתו.
 
-"חשוב מאוד: היי קשובה כשהלקוח מנסה להתערב או לקטוע אותך. עצרי מיד את הדיבור שלך כשאת מזהה שהלקוח מנסה לדבר. אל תחזרי על מה שכבר אמרת אחרי שנקטעת. המשיכי משם והתייחסי למה שהלקוח אמר. שמרי על משפטים קצרים וברורים, כדי לאפשר ללקוח להגיב. היי ממוקדת אך ורק בנושאים הקשורים להובלת דירות ולשימוש באפליקציית 'תוביל אותי'. אל תסטי לנושאים אחרים שלא קשורים לתחום זה."
+חשוב מאוד: היי קשובה כשהלקוח מנסה להתערב או לקטוע אותך. עצרי מיד את הדיבור שלך כשאת מזהה שהלקוח מנסה לדבר. אל תחזרי על מה שכבר אמרת אחרי שנקטעת. המשיכי משם והתייחסי למה שהלקוח אמר. שמרי על משפטים קצרים וברורים, כדי לאפשר ללקוח להגיב. היי ממוקדת אך ורק בנושאים הקשורים להובלת דירות ולשימוש באפליקציית 'תוביל אותי'. אל תסטי לנושאים אחרים שלא קשורים לתחום זה.
 
-"בשיחות יוצאות, כשאת מתקשרת ללקוח: התחילי לדבר מיד ברגע שהשיחה מתחברת, בלי לחכות שהלקוח ידבר קודם. הציגי את עצמך: 'שלום, זו רעות מאפליקציית תוביל אותי, אני מתקשרת לבדוק האם אתה מעוניין בשירותי הובלה?' והמשיכי את השיחה בהתאם לתגובת הלקוח.")
+בשיחות יוצאות, כשאת מתקשרת ללקוח: התחילי לדבר מיד ברגע שהשיחה מתחברת, בלי לחכות שהלקוח ידבר קודם. {greeting_instruction}
+"""
+
+# Get the system message with the recipient name if available
+def get_system_message(recipient_name=None):
+    if recipient_name:
+        name_instruction = f"פני ללקוח בשמו '{recipient_name}' כדי ליצור קשר אישי"
+        greeting_instruction = f"הציגי את עצמך: 'שלום {recipient_name}, זו רעות מאפליקציית תוביל אותי, אני מתקשרת לבדוק האם אתה מעוניין בשירותי הובלה?' והמשיכי את השיחה בהתאם לתגובת הלקוח."
+    else:
+        name_instruction = "שאלי את הלקוח לשמו כדי ליצור קשר אישי"
+        greeting_instruction = "הציגי את עצמך: 'שלום, זו רעות מאפליקציית תוביל אותי, אני מתקשרת לבדוק האם אתה מעוניין בשירותי הובלה?' והמשיכי את השיחה בהתאם לתגובת הלקוח."
+    
+    return SYSTEM_MESSAGE_TEMPLATE.format(
+        name_instruction=name_instruction,
+        greeting_instruction=greeting_instruction
+    )
+
+# Default system message (without recipient name)
+SYSTEM_MESSAGE = get_system_message()
+
 VOICE = 'shimmer'
 LOG_EVENT_TYPES = [
     'response.content.done', 'rate_limits.updated', 'response.done',
@@ -120,16 +151,69 @@ async def test_endpoint():
     """Test endpoint to check if the server is responsive."""
     return JSONResponse({"status": "ok", "message": "Server is running correctly"})
 
+# Endpoint to check call status
+@app.get("/call-status")
+async def get_call_status(call_sid: str = Query(...)):
+    """Get the status of a call by SID."""
+    try:
+        if not twilio_client:
+            return JSONResponse({
+                "status": "error", 
+                "detail": "Twilio client not configured"
+            })
+        
+        # First check our local records
+        if call_sid in active_calls:
+            call_info = active_calls[call_sid]
+            
+            # Calculate duration if call is completed
+            if "end_time" in call_info and "start_time" in call_info:
+                call_info["duration"] = int((call_info["end_time"] - call_info["start_time"]).total_seconds())
+            
+            return JSONResponse(call_info)
+        
+        # If not found locally, fetch from Twilio
+        call = twilio_client.calls(call_sid).fetch()
+        
+        # Calculate duration if available
+        duration = None
+        if call.duration:
+            duration = int(call.duration)
+        
+        status = call.status.lower()
+        
+        # Store in active calls
+        active_calls[call_sid] = {
+            "status": status,
+            "duration": duration
+        }
+        
+        return JSONResponse({
+            "status": status,
+            "duration": duration
+        })
+    except Exception as e:
+        logger.error(f"Error fetching call status: {str(e)}")
+        logger.error(traceback.format_exc())
+        return JSONResponse({
+            "status": "error",
+            "detail": str(e)
+        }, status_code=500)
 
 @app.api_route("/make-call", methods=["POST"])
-async def make_outgoing_call(phone_number: str = Form(...), webhook_url: str = Form(None)):
+async def make_outgoing_call(
+    request: Request,
+    phone_number: str = Form(...),
+    webhook_url: str = Form(None),
+    recipient_name: str = Form(None),
+    trigger_audio: str = Form(None)
+):
     """Initiate an outgoing call to the specified phone number."""
     try:
         if not twilio_client:
             raise HTTPException(status_code=500, detail="Twilio client not configured")
         
         # Clean the phone number to ensure it's in E.164 format
-        # This is a simple check - proper phone validation would be more complex
         if not phone_number.startswith('+'):
             phone_number = '+' + phone_number
         
@@ -138,10 +222,40 @@ async def make_outgoing_call(phone_number: str = Form(...), webhook_url: str = F
             # This assumes the request is coming through a proxy that sets the Host header
             webhook_url = "https://your-app-url.com"
         
-        # The URL for Twilio to connect back to our media endpoint
+        # Store custom trigger audio if provided
+        custom_audio_path = None
+        if trigger_audio:
+            # Generate a unique filename for this audio
+            timestamp = int(time.time())
+            custom_audio_path = os.path.join(uploaded_audio_dir, f"trigger_{timestamp}.txt")
+            
+            # Save the audio file
+            with open(custom_audio_path, 'w') as f:
+                f.write(trigger_audio)
+            
+            logger.info(f"Saved custom trigger audio to {custom_audio_path}")
+        
+        # Parameters to pass to the call handler
+        params = {}
+        if recipient_name:
+            params["recipient_name"] = recipient_name
+            logger.info(f"Call will use recipient name: {recipient_name}")
+        
+        if custom_audio_path:
+            params["custom_audio_path"] = os.path.basename(custom_audio_path)
+            logger.info(f"Call will use custom audio: {os.path.basename(custom_audio_path)}")
+        
+        # Build the URL with query parameters
         media_url = f"{webhook_url}/outgoing-call-handler"
+        if params:
+            query_string = "&".join([f"{key}={value}" for key, value in params.items()])
+            media_url = f"{media_url}?{query_string}"
         
         logger.info(f"Initiating outgoing call to {phone_number}")
+        logger.info(f"Using webhook URL: {media_url}")
+        
+        # Capture start time
+        start_time = datetime.now()
         
         # Make the call using Twilio's API
         call = twilio_client.calls.create(
@@ -152,6 +266,14 @@ async def make_outgoing_call(phone_number: str = Form(...), webhook_url: str = F
             # record=True,  # Record the call
             # timeout=30,   # Call timeout in seconds
         )
+        
+        # Store call information
+        active_calls[call.sid] = {
+            "status": "initiated",
+            "phone": phone_number,
+            "recipient_name": recipient_name,
+            "start_time": start_time
+        }
         
         logger.info(f"Call initiated with SID: {call.sid}")
         
@@ -168,23 +290,58 @@ async def make_outgoing_call(phone_number: str = Form(...), webhook_url: str = F
 
 
 @app.api_route("/outgoing-call-handler", methods=["GET", "POST"])
-async def handle_outgoing_call(request: Request):
+async def handle_outgoing_call(
+    request: Request,
+    recipient_name: Optional[str] = None,
+    custom_audio_path: Optional[str] = None
+):
     """Handle the outgoing call once it's answered."""
     try:
         logger.info("Outgoing call connected")
+        
+        # Log the parameters received
+        logger.info(f"Recipient name: {recipient_name}")
+        logger.info(f"Custom audio path: {custom_audio_path}")
+        
+        # Capture call SID if available
+        call_sid = None
+        if request.query_params.get("CallSid"):
+            call_sid = request.query_params.get("CallSid")
+            logger.info(f"Call SID from Twilio: {call_sid}")
+            
+            # Update call status if we're tracking it
+            if call_sid in active_calls:
+                active_calls[call_sid]["status"] = "in-progress"
+                active_calls[call_sid]["answer_time"] = datetime.now()
+        
         response = VoiceResponse()
         
         # Clearer Hebrew greeting for outgoing calls with pause
-        response.say("שלום, מתחברים לשיחה. רגע בבקשה.", language="he-IL", voice="woman")
+        greeting = "שלום, מתחברים לשיחה. רגע בבקשה."
+        if recipient_name:
+            greeting = f"שלום {recipient_name}, מתחברים לשיחה. רגע בבקשה."
+            
+        response.say(greeting, language="he-IL", voice="woman")
         response.pause(length=2)  # Longer pause to ensure the connection is established
         
         # Get the host for WebSocket connection
         host = request.url.hostname
         logger.info(f"Host for WebSocket connection: {host}")
         
-        # Set up streaming with call direction parameter to indicate outgoing call
+        # Build WebSocket URL with parameters
+        stream_params = ["direction=outgoing"]
+        if recipient_name:
+            stream_params.append(f"recipient_name={recipient_name}")
+        if custom_audio_path:
+            stream_params.append(f"custom_audio_path={custom_audio_path}")
+        if call_sid:
+            stream_params.append(f"call_sid={call_sid}")
+            
+        query_string = "&".join(stream_params)
+        
+        # Set up streaming with parameters
         connect = Connect()
-        stream_url = f'wss://{host}/media-stream?direction=outgoing'
+        stream_url = f'wss://{host}/media-stream?{query_string}'
         logger.info(f"Setting up stream URL: {stream_url}")
         connect.stream(url=stream_url)
         response.append(connect)
@@ -205,6 +362,20 @@ async def handle_incoming_call(request: Request):
     """Handle incoming call and return TwiML response to connect to Media Stream."""
     try:
         logger.info("Received incoming call request")
+        
+        # Capture call SID if available
+        call_sid = None
+        if request.query_params.get("CallSid"):
+            call_sid = request.query_params.get("CallSid")
+            logger.info(f"Incoming call SID from Twilio: {call_sid}")
+            
+            # Track call
+            active_calls[call_sid] = {
+                "status": "in-progress",
+                "direction": "incoming",
+                "start_time": datetime.now()
+            }
+        
         response = VoiceResponse()
         
         # Simplified greeting for testing
@@ -215,9 +386,16 @@ async def handle_incoming_call(request: Request):
         host = request.url.hostname
         logger.info(f"Host for WebSocket connection: {host}")
         
+        # Parameters for the stream URL
+        stream_params = ["direction=incoming"]
+        if call_sid:
+            stream_params.append(f"call_sid={call_sid}")
+            
+        query_string = "&".join(stream_params)
+        
         # Set up streaming with call direction parameter
         connect = Connect()
-        stream_url = f'wss://{host}/media-stream?direction=incoming'
+        stream_url = f'wss://{host}/media-stream?{query_string}'
         logger.info(f"Setting up stream URL: {stream_url}")
         connect.stream(url=stream_url)
         response.append(connect)
@@ -276,7 +454,14 @@ async def handle_media_stream(websocket: WebSocket):
         # Get query parameters 
         query_params = websocket.query_params
         call_direction = query_params.get("direction", "incoming")
+        recipient_name = query_params.get("recipient_name")
+        custom_audio_path = query_params.get("custom_audio_path")
+        call_sid = query_params.get("call_sid")
+        
         logger.info(f"Call direction: {call_direction}")
+        logger.info(f"Recipient name: {recipient_name}")
+        logger.info(f"Custom audio path: {custom_audio_path}")
+        logger.info(f"Call SID: {call_sid}")
         
         await websocket.accept()
         logger.info("WebSocket connection accepted")
@@ -284,8 +469,21 @@ async def handle_media_stream(websocket: WebSocket):
         try:
             openai_ws = await connect_to_openai()
             
-            # First send session update to configure the connection with call direction
-            await send_session_update(openai_ws, call_direction)
+            # Get custom audio if provided
+            custom_trigger_audio = None
+            if custom_audio_path:
+                try:
+                    audio_file_path = os.path.join(uploaded_audio_dir, custom_audio_path)
+                    logger.info(f"Loading custom audio from {audio_file_path}")
+                    with open(audio_file_path, 'r') as f:
+                        custom_trigger_audio = f.read()
+                    logger.info(f"Successfully loaded custom audio ({len(custom_trigger_audio)} bytes)")
+                except Exception as e:
+                    logger.error(f"Error loading custom audio: {str(e)}")
+                    logger.error(traceback.format_exc())
+            
+            # First send session update to configure the connection with call direction and recipient name
+            await send_session_update(openai_ws, call_direction, recipient_name)
             stream_sid = None
             
             # Wait for session to initialize
@@ -349,9 +547,9 @@ async def handle_media_stream(websocket: WebSocket):
                                     # Wait a moment
                                     await asyncio.sleep(0.5)
                                     
-                                    # Then send silent audio to trigger voice activation
+                                    # Then send audio to trigger voice activation (custom or default)
                                     logger.info("Sending trigger audio to start AI speaking")
-                                    trigger_audio = get_trigger_audio()
+                                    trigger_audio = custom_trigger_audio if custom_trigger_audio else get_trigger_audio()
                                     
                                     # Send the trigger audio multiple times to ensure it's processed
                                     for _ in range(3):  # Send 3 audio packets
@@ -366,10 +564,15 @@ async def handle_media_stream(websocket: WebSocket):
                                     trigger_audio_sent = True
                                     logger.info("Trigger audio sent successfully")
                                     
+                                    # Send greeting with name if available
+                                    greeting_content = "שלום, אני רוצה לשמוע על שירותי ההובלה שלכם"
+                                    if recipient_name:
+                                        greeting_content = f"שלום {recipient_name}, אני רוצה לשמוע על שירותי ההובלה שלכם" 
+                                    
                                     # Send another text message as backup
                                     content_message = {
                                         "type": "content.text",
-                                        "content": "שלום, אני רוצה לשמוע על שירותי ההובלה שלכם"
+                                        "content": greeting_content
                                     }
                                     await openai_ws.send(json.dumps(content_message))
                                     
@@ -379,10 +582,38 @@ async def handle_media_stream(websocket: WebSocket):
                                 except Exception as e:
                                     logger.error(f"Error triggering AI speech: {e}")
                                     logger.error(traceback.format_exc())
+                        elif data['event'] == 'stop':
+                            logger.info("Call has been disconnected")
+                            
+                            # Update call status if we have the call_sid
+                            if call_sid and call_sid in active_calls:
+                                active_calls[call_sid]["status"] = "completed"
+                                active_calls[call_sid]["end_time"] = datetime.now()
+                                
+                                # Calculate duration
+                                if "start_time" in active_calls[call_sid]:
+                                    start_time = active_calls[call_sid]["start_time"]
+                                    active_calls[call_sid]["duration"] = int(
+                                        (datetime.now() - start_time).total_seconds()
+                                    )
+                                    logger.info(f"Call duration: {active_calls[call_sid]['duration']} seconds")
                                 
                 except WebSocketDisconnect:
                     logger.info("Client disconnected.")
                     connection_active = False
+                    
+                    # Update call status if disconnected
+                    if call_sid and call_sid in active_calls:
+                        active_calls[call_sid]["status"] = "completed"
+                        active_calls[call_sid]["end_time"] = datetime.now()
+                        
+                        # Calculate duration
+                        if "start_time" in active_calls[call_sid]:
+                            start_time = active_calls[call_sid]["start_time"]
+                            active_calls[call_sid]["duration"] = int(
+                                (datetime.now() - start_time).total_seconds()
+                            )
+                    
                     if openai_ws and not openai_ws.closed:
                         await openai_ws.close()
                 except Exception as e:
@@ -454,11 +685,14 @@ async def handle_media_stream(websocket: WebSocket):
             pass
 
 
-async def send_session_update(openai_ws, call_direction="incoming"):
+async def send_session_update(openai_ws, call_direction="incoming", recipient_name=None):
     """Send session update to OpenAI WebSocket."""
     try:
         # For outgoing calls, prioritize text over audio in the initial response
         modalities = ["text", "audio"] if call_direction == "incoming" else ["audio", "text"]
+        
+        # Get the system message with recipient name if provided
+        system_message = get_system_message(recipient_name)
         
         session_update = {
             "type": "session.update",
@@ -469,12 +703,15 @@ async def send_session_update(openai_ws, call_direction="incoming"):
                 "input_audio_format": "g711_ulaw",
                 "output_audio_format": "g711_ulaw",
                 "voice": VOICE,
-                "instructions": SYSTEM_MESSAGE,
+                "instructions": system_message,
                 "modalities": modalities,
                 "temperature": 0.8,
             }
         }
         logger.info(f'Sending session update to OpenAI for {call_direction} call')
+        if recipient_name:
+            logger.info(f'Using recipient name: {recipient_name}')
+            
         await openai_ws.send(json.dumps(session_update))
         logger.info('Session update sent successfully')
         

@@ -5,11 +5,11 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 600px;
+            max-width: 800px;
             margin: 0 auto;
             padding: 20px;
         }
-        h1 {
+        h1, h2 {
             color: #333;
         }
         .form-group {
@@ -20,7 +20,7 @@
             margin-bottom: 5px;
             font-weight: bold;
         }
-        input[type="text"] {
+        input[type="text"], input[type="file"] {
             width: 100%;
             padding: 8px;
             box-sizing: border-box;
@@ -34,6 +34,7 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            margin-right: 10px;
         }
         button:hover {
             background-color: #45a049;
@@ -44,42 +45,255 @@
             border: 1px solid #ddd;
             border-radius: 4px;
             background-color: #f9f9f9;
-            display: none;
+        }
+        .call-entry {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .call-entry input {
+            margin-right: 10px;
+        }
+        .call-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+        .remove-btn {
+            background-color: #f44336;
+            margin-left: 10px;
+        }
+        .remove-btn:hover {
+            background-color: #d32f2f;
+        }
+        .call-history {
+            margin-top: 30px;
+        }
+        .call-history table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .call-history th, .call-history td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .call-history th {
+            background-color: #f2f2f2;
+        }
+        .call-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .status-completed {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .status-failed {
+            background-color: #f44336;
+            color: white;
+        }
+        .status-in-progress {
+            background-color: #2196F3;
+            color: white;
+        }
+        .status-pending {
+            background-color: #ff9800;
+            color: white;
         }
     </style>
 </head>
 <body>
-    <h1>Make an Outgoing Call</h1>
+    <h1>Make Outgoing Calls</h1>
     
     <div class="form-group">
-        <label for="phone">Phone Number (international format, e.g., +972123456789):</label>
-        <input type="text" id="phone" name="phone" placeholder="+972123456789" required>
+        <label for="trigger-audio">Upload Trigger Audio File (optional):</label>
+        <input type="file" id="trigger-audio" name="trigger-audio" accept="audio/*">
+        <small>This audio will be played to trigger the AI to speak when the call connects</small>
     </div>
     
-    <button onclick="makeCall()">Make Call</button>
+    <h2>Phone Numbers and Names</h2>
+    <div id="call-list" class="call-list">
+        <div class="call-entry">
+            <input type="text" class="phone" placeholder="+972123456789" required>
+            <input type="text" class="name" placeholder="Recipient name">
+            <button class="remove-btn" onclick="removeEntry(this)">Remove</button>
+        </div>
+    </div>
     
-    <div id="result" class="result"></div>
+    <button onclick="addNewEntry()">Add Another Number</button>
+    <button onclick="makeCall()">Start Calls</button>
+    
+    <div id="result" class="result" style="display: none;">
+        <h3>Current Call</h3>
+        <p id="current-call-info">No active call</p>
+    </div>
+    
+    <div class="call-history">
+        <h2>Call History</h2>
+        <table id="call-history-table">
+            <thead>
+                <tr>
+                    <th>Phone</th>
+                    <th>Name</th>
+                    <th>Start Time</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="call-history-body">
+                <!-- Call history will be populated here -->
+            </tbody>
+        </table>
+    </div>
     
     <script>
-        async function makeCall() {
-            const phoneNumber = document.getElementById('phone').value;
-            const resultDiv = document.getElementById('result');
+        // Store call queue and history
+        const callQueue = [];
+        const callHistory = [];
+        let currentCall = null;
+        let triggerAudioBase64 = null;
+        
+        // Handle file upload and conversion to base64
+        document.getElementById('trigger-audio').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const arrayBuffer = e.target.result;
+                    const bytes = new Uint8Array(arrayBuffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.byteLength; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                    }
+                    triggerAudioBase64 = btoa(binary);
+                    console.log('Audio file loaded and converted to base64');
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+        
+        function addNewEntry() {
+            const callList = document.getElementById('call-list');
+            const newEntry = document.createElement('div');
+            newEntry.className = 'call-entry';
+            newEntry.innerHTML = `
+                <input type="text" class="phone" placeholder="+972123456789" required>
+                <input type="text" class="name" placeholder="Recipient name">
+                <button class="remove-btn" onclick="removeEntry(this)">Remove</button>
+            `;
+            callList.appendChild(newEntry);
+        }
+        
+        function removeEntry(button) {
+            const entry = button.parentNode;
+            entry.parentNode.removeChild(entry);
+        }
+        
+        function populateCallQueue() {
+            callQueue.length = 0; // Clear existing queue
             
-            if (!phoneNumber) {
-                alert('Please enter a phone number');
+            const entries = document.querySelectorAll('.call-entry');
+            entries.forEach(entry => {
+                const phone = entry.querySelector('.phone').value.trim();
+                const name = entry.querySelector('.name').value.trim();
+                
+                if (phone) {
+                    callQueue.push({
+                        phone: phone,
+                        name: name || 'Unknown',
+                        status: 'pending'
+                    });
+                }
+            });
+            
+            return callQueue.length > 0;
+        }
+        
+        function updateCallHistory() {
+            const tableBody = document.getElementById('call-history-body');
+            tableBody.innerHTML = '';
+            
+            callHistory.forEach(call => {
+                const row = document.createElement('tr');
+                
+                // Format duration
+                let durationText = 'N/A';
+                if (call.duration !== undefined) {
+                    durationText = `${call.duration} seconds`;
+                }
+                
+                // Determine status class
+                let statusClass = '';
+                if (call.status === 'completed') statusClass = 'status-completed';
+                else if (call.status === 'failed') statusClass = 'status-failed';
+                else if (call.status === 'in-progress') statusClass = 'status-in-progress';
+                else if (call.status === 'pending') statusClass = 'status-pending';
+                
+                row.innerHTML = `
+                    <td>${call.phone}</td>
+                    <td>${call.name}</td>
+                    <td>${call.startTime || 'N/A'}</td>
+                    <td>${durationText}</td>
+                    <td><span class="call-status ${statusClass}">${call.status}</span></td>
+                `;
+                
+                tableBody.appendChild(row);
+            });
+        }
+        
+        function updateCurrentCallInfo() {
+            const infoElement = document.getElementById('current-call-info');
+            if (currentCall) {
+                infoElement.innerHTML = `
+                    <p><strong>Calling:</strong> ${currentCall.name} (${currentCall.phone})</p>
+                    <p><strong>Status:</strong> ${currentCall.status}</p>
+                    <p><strong>Started at:</strong> ${currentCall.startTime || 'Not started yet'}</p>
+                `;
+                document.getElementById('result').style.display = 'block';
+            } else {
+                infoElement.innerHTML = 'No active call';
+                if (callQueue.length === 0 && callHistory.length > 0) {
+                    infoElement.innerHTML = 'All calls completed';
+                }
+            }
+        }
+        
+        function processNextCall() {
+            if (callQueue.length === 0) {
+                currentCall = null;
+                updateCurrentCallInfo();
                 return;
             }
             
-            resultDiv.innerHTML = 'Initiating call...';
-            resultDiv.style.display = 'block';
+            currentCall = callQueue.shift();
+            currentCall.status = 'in-progress';
+            currentCall.startTime = new Date().toLocaleTimeString();
+            callHistory.push(currentCall);
             
+            updateCallHistory();
+            updateCurrentCallInfo();
+            
+            makeIndividualCall(currentCall);
+        }
+        
+        async function makeIndividualCall(callData) {
             try {
                 const formData = new FormData();
-                formData.append('phone_number', phoneNumber);
+                formData.append('phone_number', callData.phone);
+                formData.append('recipient_name', callData.name);
                 
                 // Get the current URL to use as webhook_url
                 const currentURL = window.location.origin;
                 formData.append('webhook_url', currentURL);
+                
+                // Add the trigger audio if present
+                if (triggerAudioBase64) {
+                    formData.append('trigger_audio', triggerAudioBase64);
+                }
                 
                 const response = await fetch('/make-call', {
                     method: 'POST',
@@ -89,19 +303,68 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    resultDiv.innerHTML = `
-                        <p>Call initiated successfully!</p>
-                        <p>Call SID: ${data.call_sid}</p>
-                    `;
+                    callData.callSid = data.call_sid;
+                    
+                    // Start polling for call status
+                    pollCallStatus(callData.callSid);
                 } else {
-                    resultDiv.innerHTML = `
-                        <p>Error: ${data.detail || 'Unknown error'}</p>
-                    `;
+                    callData.status = 'failed';
+                    updateCallHistory();
+                    updateCurrentCallInfo();
+                    
+                    // Move to next call after a short delay
+                    setTimeout(processNextCall, 1000);
                 }
             } catch (error) {
-                resultDiv.innerHTML = `
-                    <p>Error: ${error.message}</p>
-                `;
+                callData.status = 'failed';
+                updateCallHistory();
+                updateCurrentCallInfo();
+                
+                // Move to next call after a short delay
+                setTimeout(processNextCall, 1000);
+            }
+        }
+        
+        async function pollCallStatus(callSid) {
+            try {
+                const response = await fetch(`/call-status?call_sid=${callSid}`);
+                const data = await response.json();
+                
+                if (currentCall && currentCall.callSid === callSid) {
+                    if (data.status === 'completed' || data.status === 'failed' || data.status === 'busy' || data.status === 'no-answer') {
+                        currentCall.status = data.status === 'completed' ? 'completed' : 'failed';
+                        currentCall.duration = data.duration;
+                        updateCallHistory();
+                        updateCurrentCallInfo();
+                        
+                        // Process next call after a short delay
+                        setTimeout(processNextCall, 1000);
+                    } else {
+                        // Continue polling
+                        setTimeout(() => pollCallStatus(callSid), 3000);
+                    }
+                }
+            } catch (error) {
+                console.error('Error polling call status:', error);
+                // Continue polling despite errors
+                setTimeout(() => pollCallStatus(callSid), 5000);
+            }
+        }
+        
+        async function makeCall() {
+            if (!populateCallQueue()) {
+                alert('Please enter at least one valid phone number');
+                return;
+            }
+            
+            // Reset call history for a new batch
+            if (currentCall === null) {
+                callHistory.length = 0;
+            }
+            
+            // Start processing calls if not already in progress
+            if (!currentCall) {
+                processNextCall();
             }
         }
     </script>
