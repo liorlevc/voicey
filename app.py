@@ -512,24 +512,6 @@ async def handle_media_stream(websocket: WebSocket):
         try:
             openai_ws = await connect_to_openai()
             
-            # Get custom audio if provided
-            custom_trigger_audio = None
-            if custom_audio_path:
-                try:
-                    audio_file_path = os.path.join(uploaded_audio_dir, custom_audio_path)
-                    logger.info(f"Loading custom audio from {audio_file_path}")
-                    
-                    # Check if file exists
-                    if os.path.exists(audio_file_path):
-                        with open(audio_file_path, 'r') as f:
-                            custom_trigger_audio = f.read()
-                        logger.info(f"Successfully loaded custom audio ({len(custom_trigger_audio)} bytes)")
-                    else:
-                        logger.error(f"Custom audio file not found at {audio_file_path}")
-                except Exception as e:
-                    logger.error(f"Error loading custom audio: {str(e)}")
-                    logger.error(traceback.format_exc())
-            
             # First send session update to configure the connection with call direction and recipient name
             await send_session_update(openai_ws, call_direction, recipient_name)
             stream_sid = None
@@ -539,7 +521,6 @@ async def handle_media_stream(websocket: WebSocket):
             
             # Flag to track if we've triggered AI speech for outgoing calls
             speech_triggered = False
-            trigger_audio_sent = False
             
             # Store buffered audio data during reconnection
             audio_buffer = []
@@ -547,7 +528,7 @@ async def handle_media_stream(websocket: WebSocket):
 
             async def receive_from_twilio():
                 """Receive audio data from Twilio and send it to the OpenAI Realtime API."""
-                nonlocal stream_sid, connection_active, audio_buffer, speech_triggered, trigger_audio_sent
+                nonlocal stream_sid, connection_active, audio_buffer, speech_triggered
                 try:
                     async for message in websocket.iter_text():
                         if not connection_active:
@@ -581,68 +562,47 @@ async def handle_media_stream(websocket: WebSocket):
                                 await asyncio.sleep(1)  # Give a short delay for connection to stabilize
                                 
                                 try:
-                                    # First send a text message to trigger the AI
-                                    logger.info("Sending initial text trigger for outgoing call")
-                                    trigger_message = {
-                                        "type": "message",
-                                        "message": {
-                                            "role": "user",
-                                            "content": "תתחילי את השיחה בבקשה"  # "Please start the conversation"
+                                    logger.info("=== INITIATING AGGRESSIVE AI SPEECH TRIGGERING SEQUENCE ===")
+                                    
+                                    # Create greeting text based on recipient name
+                                    greeting = "שלום, זו רעות מאפליקציית תוביל אותי" 
+                                    if recipient_name:
+                                        greeting = f"שלום {recipient_name}, זו רעות מאפליקציית תוביל אותי"
+                                    
+                                    # Send a direct message to the AI to speak
+                                    trigger_messages = [
+                                        # First message to set user intent
+                                        {
+                                            "type": "message",
+                                            "message": {
+                                                "role": "user",
+                                                "content": "תתחילי לדבר עכשיו בבקשה. אל תחכי לי שאדבר."
+                                            }
+                                        },
+                                        # Force AI to say hello (direct speech command)
+                                        {
+                                            "type": "content.speech",
+                                            "content": greeting
+                                        },
+                                        # Force another speech continuation
+                                        {
+                                            "type": "content.speech",
+                                            "content": "אני מתקשרת לבדוק האם אתה מעוניין בשירותי הובלה?"
+                                        },
+                                        # Final fallback - direct text trigger
+                                        {
+                                            "type": "content.text",
+                                            "content": "האם אתה צריך עזרה במציאת חברת הובלה?"
                                         }
-                                    }
-                                    await openai_ws.send(json.dumps(trigger_message))
+                                    ]
                                     
-                                    # Wait a moment
-                                    await asyncio.sleep(0.5)
-                                    
-                                    # Send human-like trigger messages to get AI to respond
-                                    content_message1 = {
-                                        "type": "content.text",
-                                        "content": "היי."  # "Hi."
-                                    }
-                                    await openai_ws.send(json.dumps(content_message1))
-                                    await asyncio.sleep(0.2)
-                                    
-                                    # Then send audio to trigger voice activation (custom or default)
-                                    logger.info("Sending trigger audio to start AI speaking")
-                                    trigger_audio = custom_trigger_audio if custom_trigger_audio else get_trigger_audio()
-                                    
-                                    # Log the first 50 chars of the audio to verify it's not empty
-                                    logger.info(f"Trigger audio sample: {trigger_audio[:50]}")
-                                    
-                                    # Send the trigger audio multiple times to ensure it's processed
-                                    for i in range(5):  # Increased to 5 packets for better chance of triggering
-                                        audio_append = {
-                                            "type": "input_audio_buffer.append",
-                                            "audio": trigger_audio
-                                        }
-                                        await openai_ws.send(json.dumps(audio_append))
-                                        await asyncio.sleep(0.1)  # Small delay between packets
-                                        logger.info(f"Sent audio packet {i+1}/5")
+                                    # Send all trigger messages with short delays
+                                    for i, msg in enumerate(trigger_messages):
+                                        logger.info(f"Sending trigger message {i+1}/{len(trigger_messages)}: {msg['type']}")
+                                        await openai_ws.send(json.dumps(msg))
+                                        await asyncio.sleep(0.5)
                                     
                                     # Mark as triggered
-                                    trigger_audio_sent = True
-                                    logger.info("Trigger audio sent successfully")
-                                    
-                                    # Send greeting with name if available
-                                    greeting_content = "שלום, אני רוצה לשמוע על שירותי ההובלה שלכם"
-                                    if recipient_name:
-                                        greeting_content = f"שלום {recipient_name}, אני רוצה לשמוע על שירותי ההובלה שלכם" 
-                                    
-                                    # Send another text message as backup
-                                    content_message2 = {
-                                        "type": "content.text",
-                                        "content": greeting_content
-                                    }
-                                    await openai_ws.send(json.dumps(content_message2))
-                                    
-                                    # Force speech action as final fallback
-                                    force_speech = {
-                                        "type": "content.speech",
-                                        "content": "האם יש לכם שרותי הובלה?" # "Do you have moving services?"
-                                    }
-                                    await openai_ws.send(json.dumps(force_speech))
-                                    
                                     speech_triggered = True
                                     logger.info("All AI speech triggers sent for outgoing call")
                                     
@@ -755,7 +715,7 @@ async def handle_media_stream(websocket: WebSocket):
 async def send_session_update(openai_ws, call_direction="incoming", recipient_name=None):
     """Send session update to OpenAI WebSocket."""
     try:
-        # For outgoing calls, prioritize text over audio in the initial response
+        # For outgoing calls, prioritize audio over text for immediate speaking
         modalities = ["text", "audio"] if call_direction == "incoming" else ["audio", "text"]
         
         # Get the system message with recipient name if provided
@@ -776,6 +736,7 @@ async def send_session_update(openai_ws, call_direction="incoming", recipient_na
             }
         }
         logger.info(f'Sending session update to OpenAI for {call_direction} call')
+        logger.info(f'Using modalities order: {modalities}')
         if recipient_name:
             logger.info(f'Using recipient name: {recipient_name}')
             
