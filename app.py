@@ -46,7 +46,9 @@ SYSTEM_MESSAGE = (
 
 "מיד בתחילת השיחה, שאלי את הלקוח לשמו כדי ליצור קשר אישי, והראי התעניינות כנה. כאשר לקוח זקוק לעזרה במציאת הובלה או בשימוש באפליקציה, הסבירי את התהליך במלואו: קודם צריך להתחבר לאפליקציה, לבחור את הפריטים להובלה מתוך הקטגוריות שבאתר, לסמן את הכמות של כל פריט, ולציין האם נדרש גם פירוק והרכבה לכל פריט. לאחר מכן, יש למלא את פרטי ההובלה ואת היעד. בסיום התהליך, הלקוח יקבל באפליקציה הצעות מחיר ממובילים שונים, והוא יוכל לבחור את המוביל המתאים לו ביותר לפי שיקול דעתו."
 
-"חשוב מאוד: היי קשובה כשהלקוח מנסה להתערב או לקטוע אותך. עצרי מיד את הדיבור שלך כשאת מזהה שהלקוח מנסה לדבר. אל תחזרי על מה שכבר אמרת אחרי שנקטעת. המשיכי משם והתייחסי למה שהלקוח אמר. שמרי על משפטים קצרים וברורים, כדי לאפשר ללקוח להגיב. היי ממוקדת אך ורק בנושאים הקשורים להובלת דירות ולשימוש באפליקציית 'תוביל אותי'. אל תסטי לנושאים אחרים שלא קשורים לתחום זה.")
+"חשוב מאוד: היי קשובה כשהלקוח מנסה להתערב או לקטוע אותך. עצרי מיד את הדיבור שלך כשאת מזהה שהלקוח מנסה לדבר. אל תחזרי על מה שכבר אמרת אחרי שנקטעת. המשיכי משם והתייחסי למה שהלקוח אמר. שמרי על משפטים קצרים וברורים, כדי לאפשר ללקוח להגיב. היי ממוקדת אך ורק בנושאים הקשורים להובלת דירות ולשימוש באפליקציית 'תוביל אותי'. אל תסטי לנושאים אחרים שלא קשורים לתחום זה."
+
+"בשיחות יוצאות, כשאת מתקשרת ללקוח: התחילי לדבר מיד ברגע שהשיחה מתחברת, בלי לחכות שהלקוח ידבר קודם. הציגי את עצמך: 'שלום, זו רעות מאפליקציית תוביל אותי, אני מתקשרת לבדוק האם אתה מעוניין בשירותי הובלה?' והמשיכי את השיחה בהתאם לתגובת הלקוח.")
 VOICE = 'shimmer'
 LOG_EVENT_TYPES = [
     'response.content.done', 'rate_limits.updated', 'response.done',
@@ -249,52 +251,23 @@ async def handle_media_stream(websocket: WebSocket):
         try:
             openai_ws = await connect_to_openai()
             
-            # First send session update to configure the connection
-            await send_session_update(openai_ws)
+            # First send session update to configure the connection with call direction
+            await send_session_update(openai_ws, call_direction)
             stream_sid = None
             
-            # Wait longer for the session to initialize fully for outgoing calls
-            if call_direction == "outgoing":
-                await asyncio.sleep(3)
-            else:
-                await asyncio.sleep(2)
+            # Wait for session to initialize
+            await asyncio.sleep(2)
             
-            # For outgoing calls, send initial message to start the conversation
-            if call_direction == "outgoing" and openai_ws and not openai_ws.closed:
-                logger.info("Sending initial content for outgoing call")
-                
-                # First trigger with content.text format
-                initial_text = {
-                    "type": "content.text",
-                    "content": "שלום, זו רעות מאפליקציית 'תוביל אותי'. אני מתקשרת לבדוק אם אתה מעוניין בשירותי הובלה. האם זה זמן טוב לשיחה?"
-                }
-                await openai_ws.send(json.dumps(initial_text))
-                logger.info("Initial text content sent for outgoing call")
-                
-                # Give it a moment to process
-                await asyncio.sleep(0.5)
-                
-                # Then follow up with another message to ensure it speaks
-                follow_up = {
-                    "type": "message",
-                    "message": {
-                        "role": "user",
-                        "content": "בבקשה ספרי לי על שירותי ההובלה שלכם"
-                    }
-                }
-                await openai_ws.send(json.dumps(follow_up))
-                logger.info("Follow up message sent for outgoing call")
-            else:
-                # No initial message for incoming calls - wait for user to speak
-                logger.info("Session initialized, waiting for audio from Twilio")
-
+            # Flag to track if we've triggered AI speech for outgoing calls
+            speech_triggered = False
+            
             # Store buffered audio data during reconnection
             audio_buffer = []
             connection_active = True
 
             async def receive_from_twilio():
                 """Receive audio data from Twilio and send it to the OpenAI Realtime API."""
-                nonlocal stream_sid, connection_active, audio_buffer
+                nonlocal stream_sid, connection_active, audio_buffer, speech_triggered
                 try:
                     async for message in websocket.iter_text():
                         if not connection_active:
@@ -321,7 +294,42 @@ async def handle_media_stream(websocket: WebSocket):
                                 break
                         elif data['event'] == 'start':
                             stream_sid = data['start']['streamSid']
-                            logger.info(f"Incoming stream has started {stream_sid}")
+                            logger.info(f"Stream has started: {stream_sid}")
+                            
+                            # For outgoing calls, trigger AI to speak once we have stream_sid
+                            if call_direction == "outgoing" and not speech_triggered and stream_sid:
+                                await asyncio.sleep(1)  # Give a short delay for connection to stabilize
+                                
+                                # Send a simple text message to trigger speech
+                                try:
+                                    logger.info("Triggering AI speech for outgoing call")
+                                    
+                                    # Try the prompt approach first
+                                    trigger_message = {
+                                        "type": "message",
+                                        "message": {
+                                            "role": "user",
+                                            "content": "תתחילי את השיחה בבקשה"  # "Please start the conversation"
+                                        }
+                                    }
+                                    await openai_ws.send(json.dumps(trigger_message))
+                                    logger.info("Sent trigger message")
+                                    
+                                    await asyncio.sleep(0.5)
+                                    
+                                    # Send a content text to initiate AI response
+                                    content_message = {
+                                        "type": "content.text",
+                                        "content": "שלום, זאת שיחה בנושא הובלות"  # "Hello, this is a call about moving services"
+                                    }
+                                    await openai_ws.send(json.dumps(content_message))
+                                    logger.info("Sent content text message")
+                                    
+                                    speech_triggered = True
+                                except Exception as e:
+                                    logger.error(f"Error triggering AI speech: {e}")
+                                    logger.error(traceback.format_exc())
+                                
                 except WebSocketDisconnect:
                     logger.info("Client disconnected.")
                     connection_active = False
@@ -396,9 +404,12 @@ async def handle_media_stream(websocket: WebSocket):
             pass
 
 
-async def send_session_update(openai_ws):
+async def send_session_update(openai_ws, call_direction="incoming"):
     """Send session update to OpenAI WebSocket."""
     try:
+        # For outgoing calls, prioritize text over audio in the initial response
+        modalities = ["text", "audio"] if call_direction == "incoming" else ["audio", "text"]
+        
         session_update = {
             "type": "session.update",
             "session": {
@@ -409,11 +420,11 @@ async def send_session_update(openai_ws):
                 "output_audio_format": "g711_ulaw",
                 "voice": VOICE,
                 "instructions": SYSTEM_MESSAGE,
-                "modalities": ["text", "audio"],
+                "modalities": modalities,
                 "temperature": 0.8,
             }
         }
-        logger.info('Sending session update to OpenAI')
+        logger.info(f'Sending session update to OpenAI for {call_direction} call')
         await openai_ws.send(json.dumps(session_update))
         logger.info('Session update sent successfully')
         
