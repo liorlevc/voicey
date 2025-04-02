@@ -144,12 +144,19 @@
         <p id="current-call-info">No active call</p>
         <div id="call-controls" style="display: none;">
             <button id="terminate-call-btn" onclick="terminateCurrentCall()" style="background-color: #f44336;">Terminate Call</button>
+            <span id="call-duration" style="margin-left: 15px; font-weight: bold;">00:00</span>
+        </div>
+        <div id="call-status-indicator" style="margin-top: 10px; padding: 10px; border-radius: 4px; background-color: #f5f5f5; display: none;">
+            <p id="call-status-message">Connecting...</p>
         </div>
     </div>
     
     <div class="call-history">
         <h2>Call History</h2>
-        <button id="clear-queue-btn" onclick="clearCallQueue()" style="background-color: #ff9800; margin-bottom: 10px;">Clear Call Queue</button>
+        <div style="display: flex; margin-bottom: 10px;">
+            <button id="clear-queue-btn" onclick="clearCallQueue()" style="background-color: #ff9800; margin-right: 10px;">Clear Call Queue</button>
+            <button id="show-controls-btn" onclick="toggleForceShowControls()" style="background-color: #2196F3;">Show Call Controls</button>
+        </div>
         <table id="call-history-table">
             <thead>
                 <tr>
@@ -185,6 +192,7 @@
         let currentCall = null;
         let triggerAudioBase64 = null;
         let customScript = null;
+        let forceShowControls = false;
         
         // Default system message
         const DEFAULT_SYSTEM_SCRIPT = `שמך מיכל, את נציגת שירות טלפוני, כל מי שפותח איתך שיחה, תעני שלום בנימוס ותציגי את עצמך, תציעי למי שמדבר איתך הצעה מעניינת למעבר דירה ותבררי האם זה רלוונטי והאם הוא מעוניין לשמוע, אם הוא לא מעוניין לשמוע אל תמשיכי בשיחה ואל תסבירי במה מדובר, אם הוא מעוניין לשמוע, תספרי לו על כך שהוא יכול להשתמש באפליקציית תוביל אותי להובלת דירה בראש שקט, המטרה שלך היא להיות נחמדה, נלהבת, סוחפת אבל עניינית, מקצועית, ולא לחשוף מידע אם הלקוח אינו מסכים לשמוע על ההצעה
@@ -304,14 +312,22 @@
                 // Determine status class
                 let statusClass = '';
                 if (call.status === 'completed') statusClass = 'status-completed';
-                else if (call.status === 'failed') statusClass = 'status-failed';
-                else if (call.status === 'in-progress') statusClass = 'status-in-progress';
-                else if (call.status === 'pending') statusClass = 'status-pending';
+                else if (call.status === 'failed' || call.status === 'busy' || call.status === 'no-answer') statusClass = 'status-failed';
+                else if (call.status === 'in-progress' || call.status === 'ringing') statusClass = 'status-in-progress';
+                else if (call.status === 'pending' || call.status === 'queued' || call.status === 'initiated') statusClass = 'status-pending';
                 
-                // Add transcript button only if we have callSid and the call was connected
+                // Add transcript button if we have callSid and actions buttons for in-progress calls
                 let actionsHtml = '';
+                
+                // Add transcript button for completed calls
                 if (call.callSid && (call.status === 'completed' || call.status === 'in-progress')) {
                     actionsHtml = `<button class="view-transcript-btn" onclick="viewTranscript('${call.callSid}')">View Transcript</button>`;
+                }
+                
+                // Add terminate button for in-progress calls
+                if (call.callSid && (call.status === 'in-progress' || call.status === 'ringing' || call.status === 'queued')) {
+                    actionsHtml += `<button class="terminate-btn" style="background-color: #f44336; margin-left: 5px;" 
+                                           onclick="terminateHistoryCall('${call.callSid}')">Hang Up</button>`;
                 }
                 
                 row.innerHTML = `
@@ -329,26 +345,93 @@
         
         function updateCurrentCallInfo() {
             const infoElement = document.getElementById('current-call-info');
+            const statusIndicator = document.getElementById('call-status-indicator');
+            const statusMessage = document.getElementById('call-status-message');
+            
             if (currentCall) {
                 infoElement.innerHTML = `
                     <p><strong>Calling:</strong> ${currentCall.name} (${currentCall.phone})</p>
-                    <p><strong>Status:</strong> ${currentCall.status}</p>
+                    <p><strong>Status:</strong> <span id="current-status-text">${currentCall.status}</span></p>
                     <p><strong>Started at:</strong> ${currentCall.startTime || 'Not started yet'}</p>
                 `;
                 document.getElementById('result').style.display = 'block';
+                statusIndicator.style.display = 'block';
                 
-                // Show call controls if there's an active call with a SID
-                if (currentCall.callSid && currentCall.status === 'in-progress') {
-                    document.getElementById('call-controls').style.display = 'block';
-                } else {
+                // Show proper status message based on current state
+                let statusColor = '#f5f5f5';
+                if (currentCall.status === 'in-progress') {
+                    statusMessage.textContent = 'Call in progress - AI assistant is speaking with recipient';
+                    statusColor = '#e8f5e9'; // light green
+                    
+                    // Show call controls for in-progress calls or if forced
+                    document.getElementById('call-controls').style.display = (forceShowControls || currentCall.status === 'in-progress') ? 'block' : 'none';
+                    
+                    // Start call timer if not already started
+                    if (!currentCall.timerStarted) {
+                        startCallTimer();
+                        currentCall.timerStarted = true;
+                    }
+                } else if (currentCall.status === 'queued' || currentCall.status === 'initiated') {
+                    statusMessage.textContent = 'Call is queued - waiting for recipient to answer';
+                    statusColor = '#fff3e0'; // light orange
+                    document.getElementById('call-controls').style.display = forceShowControls ? 'block' : 'none';
+                } else if (currentCall.status === 'ringing') {
+                    statusMessage.textContent = 'Phone is ringing - waiting for answer';
+                    statusColor = '#e3f2fd'; // light blue 
+                    document.getElementById('call-controls').style.display = forceShowControls ? 'block' : 'none';
+                } else if (currentCall.status === 'failed' || currentCall.status === 'busy' || currentCall.status === 'no-answer') {
+                    statusMessage.textContent = `Call failed: ${currentCall.status}`;
+                    statusColor = '#ffebee'; // light red
                     document.getElementById('call-controls').style.display = 'none';
+                } else if (currentCall.status === 'completed') {
+                    statusMessage.textContent = 'Call completed';
+                    statusColor = '#e8f5e9'; // light green
+                    document.getElementById('call-controls').style.display = 'none';
+                    stopCallTimer();
                 }
+                
+                statusIndicator.style.backgroundColor = statusColor;
             } else {
                 infoElement.innerHTML = 'No active call';
                 if (callQueue.length === 0 && callHistory.length > 0) {
                     infoElement.innerHTML = 'All calls completed';
                 }
                 document.getElementById('call-controls').style.display = 'none';
+                statusIndicator.style.display = 'none';
+                stopCallTimer();
+            }
+        }
+        
+        // Call timer functionality
+        let callTimerInterval = null;
+        let callSeconds = 0;
+        
+        function startCallTimer() {
+            // Reset timer
+            callSeconds = 0;
+            document.getElementById('call-duration').textContent = '00:00';
+            
+            // Clear any existing timer
+            if (callTimerInterval) {
+                clearInterval(callTimerInterval);
+            }
+            
+            // Start new timer
+            callTimerInterval = setInterval(updateCallTimer, 1000);
+        }
+        
+        function updateCallTimer() {
+            callSeconds++;
+            const minutes = Math.floor(callSeconds / 60);
+            const seconds = callSeconds % 60;
+            document.getElementById('call-duration').textContent = 
+                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        function stopCallTimer() {
+            if (callTimerInterval) {
+                clearInterval(callTimerInterval);
+                callTimerInterval = null;
             }
         }
         
@@ -360,8 +443,9 @@
             }
             
             currentCall = callQueue.shift();
-            currentCall.status = 'in-progress';
+            currentCall.status = 'initiated';
             currentCall.startTime = new Date().toLocaleTimeString();
+            currentCall.timerStarted = false;
             callHistory.push(currentCall);
             
             updateCallHistory();
@@ -427,23 +511,42 @@
                 const data = await response.json();
                 
                 if (currentCall && currentCall.callSid === callSid) {
-                    if (data.status === 'completed' || data.status === 'failed' || data.status === 'busy' || data.status === 'no-answer') {
-                        currentCall.status = data.status === 'completed' ? 'completed' : 'failed';
+                    const previousStatus = currentCall.status;
+                    currentCall.status = data.status;
+                    
+                    // Update duration if available
+                    if (data.duration) {
                         currentCall.duration = data.duration;
-                        updateCallHistory();
+                    }
+                    
+                    // Update UI if status changed
+                    if (previousStatus !== data.status) {
                         updateCurrentCallInfo();
+                        updateCallHistory();
                         
+                        // Show status change notification
+                        const statusText = document.getElementById('current-status-text');
+                        if (statusText) {
+                            statusText.style.backgroundColor = '#ffff99'; // highlight with yellow
+                            setTimeout(() => {
+                                statusText.style.backgroundColor = 'transparent';
+                            }, 1000);
+                        }
+                    }
+                    
+                    if (data.status === 'completed' || data.status === 'failed' || 
+                        data.status === 'busy' || data.status === 'no-answer') {
                         // Process next call after a short delay
                         setTimeout(processNextCall, 1000);
                     } else {
-                        // Continue polling
-                        setTimeout(() => pollCallStatus(callSid), 3000);
+                        // Continue polling more frequently for active calls
+                        setTimeout(() => pollCallStatus(callSid), 1000);
                     }
                 }
             } catch (error) {
                 console.error('Error polling call status:', error);
-                // Continue polling despite errors
-                setTimeout(() => pollCallStatus(callSid), 5000);
+                // Continue polling despite errors, but less frequently
+                setTimeout(() => pollCallStatus(callSid), 3000);
             }
         }
         
@@ -556,6 +659,70 @@
             } catch (error) {
                 console.error('Error fetching transcript:', error);
                 alert('Failed to load transcript. See console for details.');
+            }
+        }
+        
+        // Force show controls toggle function
+        function toggleForceShowControls() {
+            forceShowControls = !forceShowControls;
+            const btn = document.getElementById('show-controls-btn');
+            
+            if (forceShowControls) {
+                btn.textContent = 'Hide Call Controls';
+                btn.style.backgroundColor = '#f44336';
+                
+                // Show controls if we have a current call with SID
+                if (currentCall && currentCall.callSid) {
+                    document.getElementById('call-controls').style.display = 'block';
+                }
+            } else {
+                btn.textContent = 'Show Call Controls';
+                btn.style.backgroundColor = '#2196F3';
+                
+                // Update UI to hide controls if needed
+                updateCurrentCallInfo();
+            }
+        }
+        
+        // Function to terminate a call from the history list
+        async function terminateHistoryCall(callSid) {
+            if (!callSid) return;
+            
+            try {
+                const formData = new FormData();
+                formData.append('call_sid', callSid);
+                
+                const response = await fetch('/terminate-call', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Update call status in history
+                    const historyCall = callHistory.find(call => call.callSid === callSid);
+                    if (historyCall) {
+                        historyCall.status = 'completed';
+                        updateCallHistory();
+                    }
+                    
+                    // If this is the current call, update its status too
+                    if (currentCall && currentCall.callSid === callSid) {
+                        currentCall.status = 'completed';
+                        updateCurrentCallInfo();
+                        
+                        // Process next call after a short delay
+                        setTimeout(processNextCall, 1000);
+                    }
+                    
+                    alert(`Call ${callSid} has been terminated`);
+                } else {
+                    alert(`Error terminating call: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error terminating call:', error);
+                alert('Failed to terminate call. See console for details.');
             }
         }
     </script>
