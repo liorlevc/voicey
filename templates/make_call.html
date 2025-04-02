@@ -130,10 +130,14 @@
     <div id="result" class="result" style="display: none;">
         <h3>Current Call</h3>
         <p id="current-call-info">No active call</p>
+        <div id="call-controls" style="display: none;">
+            <button id="terminate-call-btn" onclick="terminateCurrentCall()" style="background-color: #f44336;">Terminate Call</button>
+        </div>
     </div>
     
     <div class="call-history">
         <h2>Call History</h2>
+        <button id="clear-queue-btn" onclick="clearCallQueue()" style="background-color: #ff9800; margin-bottom: 10px;">Clear Call Queue</button>
         <table id="call-history-table">
             <thead>
                 <tr>
@@ -142,12 +146,24 @@
                     <th>Start Time</th>
                     <th>Duration</th>
                     <th>Status</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody id="call-history-body">
                 <!-- Call history will be populated here -->
             </tbody>
         </table>
+    </div>
+    
+    <!-- Modal for viewing transcript -->
+    <div id="transcript-modal" style="display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4);">
+        <div style="background-color: #fefefe; margin: 15% auto; padding: 20px; border: 1px solid #888; width: 80%; max-width: 700px;">
+            <span style="color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer;" onclick="document.getElementById('transcript-modal').style.display='none'">&times;</span>
+            <h2>Call Transcript</h2>
+            <div id="transcript-content" style="max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; padding: 10px; background-color: #f5f5f5;">
+                <!-- Transcript will be displayed here -->
+            </div>
+        </div>
     </div>
     
     <script>
@@ -233,12 +249,19 @@
                 else if (call.status === 'in-progress') statusClass = 'status-in-progress';
                 else if (call.status === 'pending') statusClass = 'status-pending';
                 
+                // Add transcript button only if we have callSid and the call was connected
+                let actionsHtml = '';
+                if (call.callSid && (call.status === 'completed' || call.status === 'in-progress')) {
+                    actionsHtml = `<button class="view-transcript-btn" onclick="viewTranscript('${call.callSid}')">View Transcript</button>`;
+                }
+                
                 row.innerHTML = `
                     <td>${call.phone}</td>
                     <td>${call.name}</td>
                     <td>${call.startTime || 'N/A'}</td>
                     <td>${durationText}</td>
                     <td><span class="call-status ${statusClass}">${call.status}</span></td>
+                    <td>${actionsHtml}</td>
                 `;
                 
                 tableBody.appendChild(row);
@@ -254,11 +277,19 @@
                     <p><strong>Started at:</strong> ${currentCall.startTime || 'Not started yet'}</p>
                 `;
                 document.getElementById('result').style.display = 'block';
+                
+                // Show call controls if there's an active call with a SID
+                if (currentCall.callSid && currentCall.status === 'in-progress') {
+                    document.getElementById('call-controls').style.display = 'block';
+                } else {
+                    document.getElementById('call-controls').style.display = 'none';
+                }
             } else {
                 infoElement.innerHTML = 'No active call';
                 if (callQueue.length === 0 && callHistory.length > 0) {
                     infoElement.innerHTML = 'All calls completed';
                 }
+                document.getElementById('call-controls').style.display = 'none';
             }
         }
         
@@ -365,6 +396,101 @@
             // Start processing calls if not already in progress
             if (!currentCall) {
                 processNextCall();
+            }
+        }
+        
+        async function terminateCurrentCall() {
+            if (!currentCall || !currentCall.callSid) return;
+            
+            try {
+                const formData = new FormData();
+                formData.append('call_sid', currentCall.callSid);
+                
+                const response = await fetch('/terminate-call', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Update call status
+                    currentCall.status = 'completed';
+                    updateCallHistory();
+                    updateCurrentCallInfo();
+                    
+                    // Process next call after a short delay
+                    setTimeout(processNextCall, 1000);
+                } else {
+                    alert(`Error terminating call: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error terminating call:', error);
+                alert('Failed to terminate call. See console for details.');
+            }
+        }
+        
+        async function clearCallQueue() {
+            // Clear local queue
+            if (callQueue.length > 0) {
+                if (!confirm(`Are you sure you want to clear ${callQueue.length} queued calls?`)) {
+                    return;
+                }
+                
+                callQueue.length = 0;
+                alert('Call queue cleared');
+            }
+            
+            // Also clear Twilio queue via API
+            try {
+                const response = await fetch('/clear-call-queue', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    console.log(`Cleared ${data.message}`);
+                } else {
+                    console.error(`Error clearing call queue: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error clearing call queue:', error);
+            }
+        }
+        
+        async function viewTranscript(callSid) {
+            try {
+                const response = await fetch(`/call-transcript?call_sid=${callSid}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Display the transcript in the modal
+                    const transcriptContent = document.getElementById('transcript-content');
+                    
+                    if (data.transcript_content) {
+                        // If we have the raw transcript content, display it
+                        transcriptContent.textContent = data.transcript_content;
+                    } else if (data.transcript) {
+                        // If we have structured transcript data, format it
+                        let formattedTranscript = '';
+                        data.transcript.forEach(item => {
+                            const role = item.role === 'user' ? 'USER' : 'AI';
+                            formattedTranscript += `${role}: ${item.content}\n\n`;
+                        });
+                        transcriptContent.textContent = formattedTranscript;
+                    } else {
+                        transcriptContent.textContent = 'No transcript content available.';
+                    }
+                    
+                    // Show the modal
+                    document.getElementById('transcript-modal').style.display = 'block';
+                } else {
+                    alert(`Error fetching transcript: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error fetching transcript:', error);
+                alert('Failed to load transcript. See console for details.');
             }
         }
     </script>

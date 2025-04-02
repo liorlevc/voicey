@@ -43,6 +43,12 @@ if not os.path.exists(uploaded_audio_dir):
     os.makedirs(uploaded_audio_dir)
     logger.info(f"Created directory for uploaded audio at {uploaded_audio_dir}")
 
+# Create a directory for call transcripts if it doesn't exist
+transcripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "transcripts")
+if not os.path.exists(transcripts_dir):
+    os.makedirs(transcripts_dir)
+    logger.info(f"Created directory for call transcripts at {transcripts_dir}")
+
 # Path to the trigger audio file - this will be created if it doesn't exist
 TRIGGER_AUDIO_PATH = os.path.join(audio_dir, "trigger.txt")
 
@@ -54,7 +60,7 @@ active_calls: Dict[str, Dict] = {}
 def create_silent_audio_file():
     if not os.path.exists(TRIGGER_AUDIO_PATH):
         # This is a base64-encoded representation of a short segment of silence in G.711 u-law format
-        silent_audio_base64 = "//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
+        silent_audio_base64 = "//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C//7/Av/+/wL//v8C"
         with open(TRIGGER_AUDIO_PATH, 'w') as f:
             f.write(silent_audio_base64)
         logger.info(f"Created silent audio file at {TRIGGER_AUDIO_PATH}")
@@ -215,6 +221,86 @@ async def get_call_status(call_sid: str = Query(...)):
             "detail": str(e)
         }, status_code=500)
 
+# Endpoint to terminate an active call
+@app.post("/terminate-call")
+async def terminate_call(call_sid: str = Form(...)):
+    """Terminate an active call by SID."""
+    try:
+        if not twilio_client:
+            return JSONResponse({
+                "status": "error", 
+                "detail": "Twilio client not configured"
+            })
+        
+        logger.info(f"Attempting to terminate call: {call_sid}")
+        
+        # Terminate the call via Twilio API
+        call = twilio_client.calls(call_sid).update(status="completed")
+        
+        # Update our local records
+        if call_sid in active_calls:
+            active_calls[call_sid]["status"] = "completed"
+            active_calls[call_sid]["end_time"] = datetime.now()
+            
+            # Calculate duration
+            if "start_time" in active_calls[call_sid]:
+                start_time = active_calls[call_sid]["start_time"]
+                active_calls[call_sid]["duration"] = int(
+                    (datetime.now() - start_time).total_seconds()
+                )
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"Call {call_sid} has been terminated"
+        })
+    except Exception as e:
+        logger.error(f"Error terminating call: {str(e)}")
+        logger.error(traceback.format_exc())
+        return JSONResponse({
+            "status": "error",
+            "detail": str(e)
+        }, status_code=500)
+
+# Endpoint to clear all queued calls
+@app.post("/clear-call-queue")
+async def clear_call_queue():
+    """Cancel all queued calls."""
+    try:
+        if not twilio_client:
+            return JSONResponse({
+                "status": "error", 
+                "detail": "Twilio client not configured"
+            })
+        
+        logger.info("Attempting to clear call queue")
+        
+        # Get all queued calls
+        calls = twilio_client.calls.list(status="queued")
+        
+        cancelled_count = 0
+        for call in calls:
+            # Cancel each queued call
+            twilio_client.calls(call.sid).update(status="canceled")
+            
+            # Update our local records if we're tracking this call
+            if call.sid in active_calls:
+                active_calls[call.sid]["status"] = "canceled"
+                active_calls[call.sid]["end_time"] = datetime.now()
+            
+            cancelled_count += 1
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"Cleared {cancelled_count} calls from queue"
+        })
+    except Exception as e:
+        logger.error(f"Error clearing call queue: {str(e)}")
+        logger.error(traceback.format_exc())
+        return JSONResponse({
+            "status": "error",
+            "detail": str(e)
+        }, status_code=500)
+
 @app.api_route("/make-call", methods=["POST"])
 async def make_outgoing_call(
     request: Request,
@@ -352,7 +438,7 @@ async def handle_outgoing_call(
         # Clearer Hebrew greeting for outgoing calls with pause
         greeting = "שלום, מתחברים לשיחה. רגע בבקשה."
         if recipient_name:
-            greeting = f"שלום {recipient_name}, מתחברים לשיחה. רגע בבקשה."
+            greeting = "שלום, מתחברים לשיחה. רגע בבקשה."
             
         response.say(greeting, language="he-IL", voice="woman")
         response.pause(length=2)  # Longer pause to ensure the connection is established
@@ -567,7 +653,7 @@ async def handle_media_stream(websocket: WebSocket):
                                     # Create greeting text based on recipient name
                                     greeting = "שלום, זו רעות מאפליקציית תוביל אותי" 
                                     if recipient_name:
-                                        greeting = f"שלום {recipient_name}, זו רעות מאפליקציית תוביל אותי"
+                                        greeting = "שלום, זו רעות מאפליקציית תוביל אותי"
                                     
                                     # Send a direct message to the AI to speak
                                     trigger_messages = [
@@ -652,11 +738,66 @@ async def handle_media_stream(websocket: WebSocket):
                 """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
                 nonlocal stream_sid, connection_active
                 try:
+                    # Initialize transcripts for this call if we have a call SID
+                    call_transcript = []
+                    transcript_file = None
+                    if call_sid:
+                        # Create a transcript file with timestamp
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        transcript_file = os.path.join(transcripts_dir, f"call_{call_sid}_{timestamp}.txt")
+                        
+                        # Initialize transcript file with call info
+                        with open(transcript_file, 'w') as f:
+                            call_direction_str = "Outgoing" if call_direction == "outgoing" else "Incoming"
+                            f.write(f"=== {call_direction_str} CALL TRANSCRIPT ===\n")
+                            f.write(f"Call SID: {call_sid}\n")
+                            f.write(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                            if recipient_name:
+                                f.write(f"Recipient: {recipient_name}\n")
+                            f.write("===================================\n\n")
+                            
+                        # Store transcript file path in active_calls
+                        if call_sid in active_calls:
+                            active_calls[call_sid]["transcript_file"] = transcript_file
+                    
                     async for openai_message in openai_ws:
                         response = json.loads(openai_message)
                         
                         # Log all events for better debugging
                         logger.info(f"OpenAI event: {response['type']}")
+                        
+                        # Record transcripts
+                        if response['type'] == 'response.audio_transcript.delta' and response.get('delta'):
+                            # This is a transcript of what the user said
+                            transcript_text = response.get('delta', '')
+                            logger.info(f"USER SPEECH: {transcript_text}")
+                            
+                            # Save to transcript file if available
+                            if transcript_file and transcript_text:
+                                with open(transcript_file, 'a') as f:
+                                    f.write(f"USER: {transcript_text}\n")
+                                
+                                # Store in active calls
+                                if call_sid in active_calls:
+                                    if "transcript" not in active_calls[call_sid]:
+                                        active_calls[call_sid]["transcript"] = []
+                                    active_calls[call_sid]["transcript"].append({"role": "user", "content": transcript_text})
+                        
+                        if response['type'] == 'response.content.delta' and response.get('delta'):
+                            # This is AI's response text
+                            content_text = response.get('delta', '')
+                            logger.info(f"AI RESPONSE: {content_text}")
+                            
+                            # Save to transcript file if available
+                            if transcript_file and content_text:
+                                with open(transcript_file, 'a') as f:
+                                    f.write(f"AI: {content_text}\n")
+                                
+                                # Store in active calls
+                                if call_sid in active_calls:
+                                    if "transcript" not in active_calls[call_sid]:
+                                        active_calls[call_sid]["transcript"] = []
+                                    active_calls[call_sid]["transcript"].append({"role": "assistant", "content": content_text})
                         
                         if response['type'] in LOG_EVENT_TYPES:
                             if 'error' in response:
@@ -750,6 +891,49 @@ async def send_session_update(openai_ws, call_direction="incoming", recipient_na
         logger.error(traceback.format_exc())
         raise
 
+# Endpoint to get call transcript
+@app.get("/call-transcript")
+async def get_call_transcript(call_sid: str = Query(...)):
+    """Get the transcript of a call by SID."""
+    try:
+        # Check if we have the call in our records
+        if call_sid in active_calls and "transcript" in active_calls[call_sid]:
+            return JSONResponse({
+                "status": "success",
+                "call_sid": call_sid,
+                "transcript": active_calls[call_sid]["transcript"]
+            })
+        
+        # Check if we have a transcript file for this call
+        transcript_files = [f for f in os.listdir(transcripts_dir) if f.startswith(f"call_{call_sid}_")]
+        
+        if transcript_files:
+            # Use the most recent transcript file
+            transcript_files.sort(reverse=True)
+            transcript_file = os.path.join(transcripts_dir, transcript_files[0])
+            
+            # Read the transcript file
+            with open(transcript_file, 'r') as f:
+                transcript_content = f.read()
+            
+            return JSONResponse({
+                "status": "success",
+                "call_sid": call_sid,
+                "transcript_file": transcript_files[0],
+                "transcript_content": transcript_content
+            })
+        
+        return JSONResponse({
+            "status": "error",
+            "detail": f"No transcript found for call {call_sid}"
+        }, status_code=404)
+    except Exception as e:
+        logger.error(f"Error fetching call transcript: {str(e)}")
+        logger.error(traceback.format_exc())
+        return JSONResponse({
+            "status": "error",
+            "detail": str(e)
+        }, status_code=500)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0") 
