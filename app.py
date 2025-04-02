@@ -103,9 +103,9 @@ SYSTEM_MESSAGE_TEMPLATE = """
 # Get the system message with the recipient name if available
 def get_system_message(recipient_name=None):
     if recipient_name:
-        greeting_instruction = "הציגי את עצמך: 'שלום, זו מיכל מאפליקציית תוביל אותי, האם יש לך זמן לשמוע על הצעה מעניינת למעבר דירה?' והמשיכי את השיחה בהתאם לתגובת הלקוח."
+        greeting_instruction = "הציגי את עצמך: 'שלום מדברת מיכל, אני מתקשרת בכדי לברר האם אתה מתכנן מעבר דירה בקרוב? והאם תרצה לשמוע את ההצעה?' והמשיכי את השיחה בהתאם לתגובת הלקוח."
     else:
-        greeting_instruction = "הציגי את עצמך: 'שלום, זו מיכל מאפליקציית תוביל אותי, האם יש לך זמן לשמוע על הצעה מעניינת למעבר דירה?' והמשיכי את השיחה בהתאם לתגובת הלקוח."
+        greeting_instruction = "הציגי את עצמך: 'שלום מדברת מיכל, אני מתקשרת בכדי לברר האם אתה מתכנן מעבר דירה בקרוב? והאם תרצה לשמוע את ההצעה?' והמשיכי את השיחה בהתאם לתגובת הלקוח."
     
     return SYSTEM_MESSAGE_TEMPLATE.format(
         greeting_instruction=greeting_instruction
@@ -644,9 +644,9 @@ async def handle_media_stream(websocket: WebSocket):
                                     logger.info("=== INITIATING AGGRESSIVE AI SPEECH TRIGGERING SEQUENCE ===")
                                     
                                     # Create greeting text based on recipient name
-                                    greeting = "שלום, זו מיכל מאפליקציית תוביל אותי" 
+                                    greeting = "שלום מדברת מיכל, אני מתקשרת בכדי לברר האם אתה מתכנן מעבר דירה בקרוב? והאם תרצה לשמוע את ההצעה?" 
                                     if recipient_name:
-                                        greeting = "שלום, זו מיכל מאפליקציית תוביל אותי"
+                                        greeting = "שלום מדברת מיכל, אני מתקשרת בכדי לברר האם אתה מתכנן מעבר דירה בקרוב? והאם תרצה לשמוע את ההצעה?"
                                     
                                     # Send a direct message to the AI to speak
                                     trigger_messages = [
@@ -663,15 +663,10 @@ async def handle_media_stream(websocket: WebSocket):
                                             "type": "content.speech",
                                             "content": greeting
                                         },
-                                        # Force another speech continuation
-                                        {
-                                            "type": "content.speech",
-                                            "content": "האם יש לך זמן לשמוע על הצעה מעניינת למעבר דירה?"
-                                        },
                                         # Final fallback - direct text trigger
                                         {
                                             "type": "content.text",
-                                            "content": "האם יש לך זמן לשמוע על הצעה מעניינת למעבר דירה?"
+                                            "content": "האם אתה מתכנן מעבר דירה בקרוב?"
                                         }
                                     ]
                                     
