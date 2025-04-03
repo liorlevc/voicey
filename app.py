@@ -72,7 +72,7 @@ SYSTEM_MESSAGE = """שמך מיכל, את נציגת שירות של אפליק�
 - אל תשתמשי במשפטים כמו "אני כאן כדי לעזור" או "אני כאן כדי לסייע"
 
 זכרי: המטרה העיקרית היא לגרום למשתמשים להוריד את האפליקציה ולהשתמש בה, אבל רק אם הם מתכננים מעבר דירה ומעוניינים בשירות. חשוב ליצור חוויית שיחה נעימה ומועילה, גם אם לא מגיעים להמרה."""
-VOICE = 'shimmer'
+VOICE = 'alloy'
 LOG_EVENT_TYPES = [
     'response.content.done', 'rate_limits.updated', 'response.done',
     'input_audio_buffer.committed', 'input_audio_buffer.speech_stopped',
@@ -444,7 +444,7 @@ async def send_session_update(openai_ws, call_direction="incoming"):
                 "voice": VOICE,
                 "instructions": SYSTEM_MESSAGE,
                 "modalities": modalities,
-                "temperature": 0.8,
+                "temperature": 1.2,
             }
         }
         logger.info(f'Sending session update to OpenAI for {call_direction} call')
