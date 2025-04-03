@@ -164,9 +164,9 @@ async def handle_outgoing_call(request: Request):
         logger.info("Outgoing call connected")
         response = VoiceResponse()
         
-        # Clearer Hebrew greeting for outgoing calls with pause
-        response.say("שלום, מתחברים לשיחה. רגע בבקשה.", language="he-IL", voice="woman")
-        response.pause(length=2)  # Longer pause to ensure the connection is established
+        # Shorter Hebrew greeting with minimal pause
+        response.say("שלום, מתחברים לשיחה.", language="he-IL", voice="woman")
+        response.pause(length=0.5)  # Reduced from 2 seconds to 0.5 seconds
         
         # Get the host for WebSocket connection
         host = request.url.hostname
@@ -278,8 +278,8 @@ async def handle_media_stream(websocket: WebSocket):
             await send_session_update(openai_ws, call_direction)
             stream_sid = None
             
-            # Wait for session to initialize
-            await asyncio.sleep(2)
+            # Reduced wait time for session initialization
+            await asyncio.sleep(0.5)  # Reduced from 2 seconds to 0.5 seconds
             
             # Flag to track if we've triggered AI speech for outgoing calls
             speech_triggered = False
@@ -319,35 +319,37 @@ async def handle_media_stream(websocket: WebSocket):
                             stream_sid = data['start']['streamSid']
                             logger.info(f"Stream has started: {stream_sid}")
                             
-                            # For outgoing calls, trigger AI to speak once we have stream_sid
+                            # For outgoing calls, trigger AI speech once we have stream_sid
                             if call_direction == "outgoing" and not speech_triggered and stream_sid:
-                                await asyncio.sleep(1)  # Give a short delay for connection to stabilize
+                                await asyncio.sleep(0.2)  # Reduced from 1 second to 0.2 seconds
                                 
                                 # Send a simple text message to trigger speech
                                 try:
                                     logger.info("Triggering AI speech for outgoing call")
                                     
-                                    # Try the prompt approach first
+                                    # Try the prompt approach with immediate speech
                                     trigger_message = {
                                         "type": "message",
                                         "message": {
                                             "role": "user",
-                                            "content": "תתחילי את השיחה בבקשה"  # "Please start the conversation"
+                                            "content": "תתחילי את השיחה מיד"  # "Start the conversation immediately"
                                         }
                                     }
                                     await openai_ws.send(json.dumps(trigger_message))
                                     logger.info("Sent trigger message")
                                     
-                                    await asyncio.sleep(0.5)
+                                    # Reduce delay between messages
+                                    await asyncio.sleep(0.1)  # Reduced from 0.5 seconds
                                     
-                                    # Send a content text to initiate AI response
-                                    content_message = {
-                                        "type": "content.text",
-                                        "content": "שלום, זאת שיחה בנושא הובלות"  # "Hello, this is a call about moving services"
+                                    # Send a direct speech command for immediate response
+                                    speech_message = {
+                                        "type": "content.speech",
+                                        "content": "שלום, מדברת מיכל. אני מתקשרת לבדוק האם את/ה מתכנן/ת מעבר דירה בקרוב?"
                                     }
-                                    await openai_ws.send(json.dumps(content_message))
-                                    logger.info("Sent content text message")
+                                    await openai_ws.send(json.dumps(speech_message))
+                                    logger.info("Sent direct speech command")
                                     
+                                    # Set as triggered
                                     speech_triggered = True
                                 except Exception as e:
                                     logger.error(f"Error triggering AI speech: {e}")
@@ -430,7 +432,7 @@ async def handle_media_stream(websocket: WebSocket):
 async def send_session_update(openai_ws, call_direction="incoming"):
     """Send session update to OpenAI WebSocket."""
     try:
-        # For outgoing calls, prioritize text over audio in the initial response
+        # For outgoing calls, prioritize audio over text for faster response
         modalities = ["text", "audio"] if call_direction == "incoming" else ["audio", "text"]
         
         session_update = {
@@ -451,8 +453,8 @@ async def send_session_update(openai_ws, call_direction="incoming"):
         await openai_ws.send(json.dumps(session_update))
         logger.info('Session update sent successfully')
         
-        # Wait a moment for the session to initialize properly
-        await asyncio.sleep(1)
+        # Reduced wait time for session initialization
+        await asyncio.sleep(0.3)  # Reduced from 1 second to 0.3 seconds
     except Exception as e:
         logger.error(f"Error sending session update: {str(e)}")
         logger.error(traceback.format_exc())
