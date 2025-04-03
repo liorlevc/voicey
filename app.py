@@ -164,9 +164,7 @@ async def handle_outgoing_call(request: Request):
         logger.info("Outgoing call connected")
         response = VoiceResponse()
         
-        # Shorter Hebrew greeting with minimal pause
-        response.say("שלום, מתחברים לשיחה.", language="he-IL", voice="woman")
-        response.pause(length=0.5)  # Reduced from 2 seconds to 0.5 seconds
+        # Removed greeting and pause as requested
         
         # Get the host for WebSocket connection
         host = request.url.hostname
@@ -197,9 +195,7 @@ async def handle_incoming_call(request: Request):
         logger.info("Received incoming call request")
         response = VoiceResponse()
         
-        # Simplified greeting for testing
-        response.say("Welcome", voice="woman")
-        response.pause(length=1)
+        # Removed greeting and pause as requested
         
         # Get the host for WebSocket connection
         host = request.url.hostname
